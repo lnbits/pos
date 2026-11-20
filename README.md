@@ -71,11 +71,14 @@ To build from the lockfile:
 ```sh
 npm ci
 make build
+LNBITS_CORE_PATH=/path/to/lnbits make test-ui
 LNBITS_CORE_PATH=/path/to/lnbits make test-host PYTHON=/path/to/lnbits/.venv/bin/python
 make package
 ```
 
 `test-host` executes the compiled component against core's actual host imports. It also checks core's query-parameter conversion for payment status. `package` creates `dist/pos-0.1.0.zip` with only the runtime files. Core must install this release ZIP, not a GitHub source ZIP: source includes a Python test helper, which is deliberately excluded from the WASM release. Reactivate the extension (or restart the development server) after rebuilding so core warms the new component before serving requests.
+
+`test-ui` executes core's real Vue and Quasar scripts in entrypoint order with small browser stubs. It catches startup failures such as loading Quasar before `document.body` exists, and checks dark/light mode with origin storage unavailable. It does not replace visual browser checks.
 
 Verified: `make check` (32 tests), `make build`, `make test-contract` and `make test-host`; HTTP checks through core for private settings, anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
 

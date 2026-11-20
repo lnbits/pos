@@ -1,5 +1,5 @@
 PYTHON ?= python3
-.PHONY: check test build package test-host test-contract
+.PHONY: check test build package test-host test-contract test-ui
 check:
 	node --check src/domain.js
 	node --check src/pos.js
@@ -22,3 +22,6 @@ test-host:
 
 test-contract:
 	$(PYTHON) test/check_host.py --contracts-only
+
+test-ui:
+	node test/check_ui.mjs
