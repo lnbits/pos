@@ -132,10 +132,10 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
 <main class="q-pa-md">
   <header class="row items-center justify-between q-gutter-md q-mb-lg">
     <div class="row items-center no-wrap q-gutter-sm">
-      <q-icon name="point_of_sale" color="primary" size="md" />
+      <img src="/ext-assets/pos/assets/icon.png" width="40" height="40" alt="PoS logo">
       <div>
-        <div class="text-h5">{{isPublic ? terminal?.name || 'Bolt Till' : 'Bolt Till'}}</div>
-        <div class="text-caption">{{isPublic ? terminal?.role==='display' ? 'Customer display · Bolt Till' : 'Powered by Bolt Till' : 'Your Bitcoin counter.'}}</div>
+        <div class="text-h5">{{isPublic ? terminal?.name || 'PoS' : 'PoS'}}</div>
+        <div class="text-caption">{{isPublic ? terminal?.role==='display' ? 'Customer display · PoS' : 'Powered by PoS' : 'Your Bitcoin counter.'}}</div>
       </div>
     </div>
     <div v-if="!loading" class="row q-gutter-sm">
@@ -370,7 +370,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
           <thead><tr><th class="text-left">Date</th><th class="text-left">Total</th><th class="text-left">Method</th><th class="text-left">Status / shares</th><th class="text-left">Actions</th></tr></thead>
           <tbody><tr v-for="c in sales.rows" :key="c.id"><td>{{timestamp(c.created_at)}}</td><td>{{money(c.sale.total_minor,c.sale.currency)}}</td><td>{{c.method}}</td><td>{{c.status}}<div v-for="(p,k) in c.payouts" :key="k" class="text-caption">{{k}}: {{p.state}} · {{p.amount_sat}} sats</div></td><td><q-btn flat label="Check" @click="reconcile(c)" :disable="busy" /><q-btn flat label="Receipt" @click="print(c)" :disable="busy||c.status!=='paid'" /></td></tr></tbody>
         </q-markup-table>
-        <p class="text-caption q-mt-md">Shares marked “review” or “pending” need checking in the wallet. Bolt Till never resends an uncertain payment automatically.</p><p v-if="error" role="alert" class="text-negative">{{error}}</p>
+        <p class="text-caption q-mt-md">Shares marked “review” or “pending” need checking in the wallet. PoS never resends an uncertain payment automatically.</p><p v-if="error" role="alert" class="text-negative">{{error}}</p>
       </q-card-section>
       <q-card-actions align="right"><q-btn flat label="Previous" @click="pageSales(-50)" :disable="busy||offset===0" /><span>{{sales.rows.length?offset+1:0}}–{{offset+sales.rows.length}}</span><q-btn flat label="Next" @click="pageSales(50)" :disable="busy||offset+50>=sales.total" /></q-card-actions>
     </q-card>

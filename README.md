@@ -1,4 +1,6 @@
-# Bolt Till for LNbits WASM
+# PoS for LNbits WASM
+
+<img src="static/assets/icon.png" width="128" alt="PoS logo">
 
 **Your Bitcoin counter.** A fresh point-of-sale extension, based on the features of [TPoS](https://github.com/lnbits/tpos) that current core exposes to WASM. Extension ID: `pos`. No TPoS database or Watchonly dependency.
 
@@ -78,6 +80,17 @@ make package
 Verified: `make check` (32 tests), `make build`, `make test-contract` and `make test-host`; HTTP checks through core for private settings, anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
 
 Before production use, finish a manual browser check through the real core wrapper, including desktop/mobile checkout, display updates and print/CSV/payment-permission dialogs. Hosted fiat and external revenue payouts have not been exercised with live providers.
+
+## Brand assets
+
+The extension name is **PoS**. The transparent logo is in `static/assets/icon.png`, used by the core extension list and the PoS header. It was generated with the built-in image generation tool.
+
+<details>
+<summary>Logo prompt</summary>
+
+Use case: logo-brand. Asset type: square app icon for the LNbits PoS point-of-sale extension. Create one crisp, distinctive flat logo: a compact payment terminal / receipt silhouette with a lightning bolt cleverly cut into its center. Solid Bitcoin orange body, clean white bolt detail, generous transparent margin. A clear, friendly geometric mark that stays legible at 32 pixels, with balanced thick shapes, precise edges and a subtle receipt-paper notch. No words, no letters, no currency symbols, no slogan, no gradients, no shadows, no 3D, no mockup, no border or background tile outside the mark. Transparent background with real alpha. This is only a logo asset; the product keeps its existing core UI and the name PoS.
+
+</details>
 
 ## License
 

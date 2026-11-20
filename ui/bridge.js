@@ -6,7 +6,7 @@ export function createBridge(parent=window.parent, origin=new URL(window.locatio
     if (connection) return connection;
     connection=new Promise((resolve,reject)=>{
       const id=crypto.randomUUID(),channel=new MessageChannel();
-      const timer=setTimeout(()=>{channel.port1.close();connection=null;reject(Error('Open Bolt Till inside LNbits.'));},15000);
+      const timer=setTimeout(()=>{channel.port1.close();connection=null;reject(Error('Open PoS inside LNbits.'));},15000);
       channel.port1.onmessage=e=>{
         if (e.data?.type==='lnbits-extension:connected' && e.data.id===id) {
           clearTimeout(timer); resolve(channel.port1);

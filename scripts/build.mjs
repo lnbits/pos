@@ -21,7 +21,7 @@ const style=compileStyle({source:descriptor.styles.map(s=>s.content).join('\n'),
 if(style.errors.length)throw new Error(String(style.errors));
 await writeFile('static/app.css',style.code);
 const licenses=[['Vue','vue/LICENSE'],['QRCode','qrcode/license'],['DijkstraJS','dijkstrajs/LICENSE.md'],['ComponentizeJS / StarlingMonkey embedding','@bytecodealliance/componentize-js/LICENSE']];
-let notices='Third-party software included in Bolt Till\n\n';
+let notices='Third-party software included in PoS\n\n';
 for(const [name,file] of licenses)notices+=`${name}\n${await readFile(path.join('node_modules',file),'utf8')}\n\n`;
 notices+='The WASM component embeds unmodified upstream StarlingMonkey/SpiderMonkey code.\nSpiderMonkey is available under the Mozilla Public License 2.0:\nhttps://www.mozilla.org/MPL/2.0/\nEngine source and pinned upstream dependencies:\nhttps://github.com/bytecodealliance/ComponentizeJS/tree/v0.23.0\nhttps://github.com/bytecodealliance/StarlingMonkey\n';
 await writeFile('THIRD_PARTY_NOTICES.txt',notices);
