@@ -1,0 +1,273 @@
+{
+  "id": "pos",
+  "name": "PoS",
+  "short_description": "Shareable point of sale with products, taxes, tips and Lightning checkout.",
+  "version": "0.1.0",
+  "min_lnbits_version": "1.7.1",
+  "extension_type": "wasm",
+  "wasm": {
+    "module": "wasm/pos.wasm",
+    "wit": "wasm/lnbits-extension.wit",
+    "world": "pos",
+    "exports": [
+      {
+        "name": "metadata",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "list-terminals",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "terminal-settings",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "save-terminal",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "disable-terminal",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "rotate-links",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "sales",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "reconcile",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "get-terminal",
+        "visibility": "public",
+        "sync": true
+      },
+      {
+        "name": "create-checkout",
+        "visibility": "public",
+        "sync": true
+      },
+      {
+        "name": "checkout-status",
+        "visibility": "public",
+        "sync": true
+      },
+      {
+        "name": "public-history",
+        "visibility": "public",
+        "sync": true
+      },
+      {
+        "name": "record-payment",
+        "visibility": "event",
+        "sync": true
+      }
+    ]
+  },
+  "events": {
+    "onInvoicePaid": "record-payment"
+  },
+  "ui_routes": [
+    {
+      "path": "/pos",
+      "entrypoint": "ui/index.html",
+      "auth": "user"
+    },
+    {
+      "path": "/pos/terminal/{link}",
+      "entrypoint": "ui/index.html",
+      "auth": "public",
+      "path_params": {
+        "link": "link"
+      }
+    }
+  ],
+  "api_routes": [
+    {
+      "method": "GET",
+      "path": "/metadata",
+      "export": "metadata",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/terminals",
+      "export": "list-terminals",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/terminals/{id}",
+      "export": "terminal-settings",
+      "auth": "user",
+      "path_params": {"id": "id"}
+    },
+    {
+      "method": "POST",
+      "path": "/terminals",
+      "export": "save-terminal",
+      "auth": "user"
+    },
+    {
+      "method": "POST",
+      "path": "/terminals/disable",
+      "export": "disable-terminal",
+      "auth": "user"
+    },
+    {
+      "method": "POST",
+      "path": "/terminals/rotate",
+      "export": "rotate-links",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/sales",
+      "export": "sales",
+      "auth": "user"
+    },
+    {
+      "method": "POST",
+      "path": "/sales/reconcile",
+      "export": "reconcile",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/{link}",
+      "export": "get-terminal",
+      "auth": "public",
+      "path_params": {
+        "link": "link"
+      },
+      "ownerContext": {
+        "table": "links",
+        "idParam": "link"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/terminal/{link}/checkout",
+      "export": "create-checkout",
+      "auth": "public",
+      "path_params": {
+        "link": "link"
+      },
+      "ownerContext": {
+        "table": "links",
+        "idParam": "link"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/{link}/status",
+      "export": "checkout-status",
+      "auth": "public",
+      "path_params": {
+        "link": "link"
+      },
+      "ownerContext": {
+        "table": "links",
+        "idParam": "link"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/{link}/history",
+      "export": "public-history",
+      "auth": "public",
+      "path_params": {
+        "link": "link"
+      },
+      "ownerContext": {
+        "table": "links",
+        "idParam": "link"
+      }
+    }
+  ],
+  "permissions": [
+    {
+      "id": "ext.storage.read",
+      "description": "Read only the current owner's PoS records."
+    },
+    {
+      "id": "ext.storage.write",
+      "description": "Save terminals, checkout receipts and payment attempts."
+    },
+    {
+      "id": "wallet.list",
+      "description": "Select receiving wallets from the current account."
+    },
+    {
+      "id": "wallet.create_invoice_public",
+      "description": "Receive Lightning payments in wallets bound to saved checkouts.",
+      "policies": [
+        {
+          "table": "checkouts",
+          "wallet_field": "wallet"
+        },
+        {
+          "table": "tip_sources",
+          "wallet_field": "wallet"
+        }
+      ]
+    },
+    {
+      "id": "wallet.invoice_status",
+      "description": "Verify invoices belonging to this PoS checkout."
+    },
+    {
+      "id": "wallet.payments.refresh",
+      "description": "Let the owner refresh a pending checkout in their own wallet."
+    },
+    {
+      "id": "wallet.create_fiat_invoice_public",
+      "description": "Create hosted checkout with the owner's saved provider and wallet.",
+      "policies": [
+        {
+          "table": "checkouts",
+          "wallet_field": "wallet",
+          "provider_field": "provider"
+        }
+      ]
+    },
+    {
+      "id": "wallet.pay_invoice_background",
+      "description": "Send configured Lightning tips and revenue shares only after verified payment; separate owner wallet approval required."
+    },
+    {
+      "id": "utils.basic",
+      "description": "Read currency exchange rates."
+    },
+    {
+      "id": "websocket.publish",
+      "description": "Notify customer displays to reload their checkout.",
+      "policies": [
+        {
+          "max_messages_per_second": 10
+        }
+      ]
+    },
+    {
+      "id": "websocket.subscribe",
+      "description": "Receive checkout updates through the core bridge."
+    },
+    {
+      "id": "ui.storage.local",
+      "description": "Save held carts and terminal preferences on this device."
+    }
+  ]
+}

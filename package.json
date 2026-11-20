@@ -1,0 +1,21 @@
+{
+  "name": "lnbits-pos",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "build": "node scripts/build.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "vue": "3.5.46"
+  },
+  "devDependencies": {
+    "@bytecodealliance/componentize-js": "0.23.0",
+    "@bytecodealliance/jco": "1.37.0",
+    "@vue/compiler-sfc": "3.5.46",
+    "esbuild": "0.28.2"
+  }
+}

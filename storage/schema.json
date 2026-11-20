@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "tables": {
+    "terminals": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "active",
+          "type": "boolean"
+        },
+        {
+          "name": "cashier_link",
+          "type": "string"
+        },
+        {
+          "name": "display_link",
+          "type": "string"
+        },
+        {
+          "name": "last_created",
+          "type": "integer"
+        },
+        {
+          "name": "latest_checkout",
+          "type": "string"
+        },
+        {
+          "name": "data_json",
+          "type": "string"
+        }
+      ]
+    },
+    "links": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "terminal_id",
+          "type": "string"
+        },
+        {
+          "name": "role",
+          "type": "string"
+        },
+        {
+          "name": "revoked",
+          "type": "boolean"
+        }
+      ]
+    },
+    "checkouts": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "terminal_id",
+          "type": "string"
+        },
+        {
+          "name": "action_id",
+          "type": "string"
+        },
+        {
+          "name": "wallet",
+          "type": "string"
+        },
+        {
+          "name": "provider",
+          "type": "string"
+        },
+        {
+          "name": "method",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "type": "string"
+        },
+        {
+          "name": "created_at",
+          "type": "integer"
+        },
+        {
+          "name": "payment_hash",
+          "type": "string"
+        },
+        {
+          "name": "payment_request",
+          "type": "string"
+        },
+        {
+          "name": "amount_msat",
+          "type": "integer"
+        },
+        {
+          "name": "payouts_json",
+          "type": "string"
+        },
+        {
+          "name": "data_json",
+          "type": "string"
+        }
+      ]
+    },
+    "tip_sources": {
+      "fields": [
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "wallet",
+          "type": "string"
+        }
+      ]
+    }
+  }
+}
