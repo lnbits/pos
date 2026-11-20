@@ -22,7 +22,7 @@ const pos=createPos({
   refreshPayment:(walletId,checkingId)=>refreshPayment({walletId,checkingId}),
   fiatInvoice:(sourceId,amount,currency,memo)=>createFiatInvoicePublic({sourceId,amount,currency,memo}),
   payInvoice:(walletId,paymentRequest,maxSat,description)=>payInvoice({walletId,paymentRequest,maxSat:BigInt(maxSat),description,extra:[]}),
-  payLnurl:(walletId,lnurl,amount)=>payLnurl({walletId,lnurl,amount,currency:'sat',description:'PoS revenue share',comment:undefined,maxSat:BigInt(amount),extra:[],fetchOnly:false}),
+  payLnurl:(walletId,lnurl,amount)=>payLnurl({walletId,lnurl,amount,currency:'sat',description:'Bolt Till revenue share',comment:undefined,maxSat:BigInt(amount),extra:[],fetchOnly:false}),
   publish:(itemId,data)=>websocketPublish({itemId,dataJson:JSON.stringify(data)})
 });
 

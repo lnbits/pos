@@ -63,8 +63,8 @@ export function createPos(host) {
         if (kind === 'tip') {
           const source=host.id('tip_');
           save('tip_sources',{id:source,wallet:payout.wallet});
-          const invoice=host.invoice(source,payout.amount,'sat','PoS tip');
-          result=host.payInvoice(c.wallet,invoice.paymentRequest,payout.amount,'PoS tip');
+          const invoice=host.invoice(source,payout.amount,'sat','Bolt Till tip');
+          result=host.payInvoice(c.wallet,invoice.paymentRequest,payout.amount,'Bolt Till tip');
         } else {
           result=host.payLnurl(c.wallet,payout.address,payout.amount);
         }

@@ -1,8 +1,10 @@
-# PoS for LNbits WASM
+# Bolt Till for LNbits WASM
 
-A fresh point-of-sale extension, based on the features of [TPoS](https://github.com/lnbits/tpos) that current core exposes to WASM. Extension ID: `pos`. No TPoS database or Watchonly dependency.
+**Your Bitcoin counter.** A fresh point-of-sale extension, based on the features of [TPoS](https://github.com/lnbits/tpos) that current core exposes to WASM. Extension ID: `pos`. No TPoS database or Watchonly dependency.
 
 **Development status:** the WASM component and browser assets build successfully. Source tests and compiled-component checks pass against the core commit below. Manual visual checks remain pending because the browser-control tool failed before navigation. Treat this as a development release.
+
+The theme update was also checked against local core commit `0edc6270bcee36c4fc67ee1d0f41f4dfceda88fb`, including compiled host calls and owner isolation. Browser visual checks remain unverified.
 
 The core reference is `lnbits/lnbits` dev commit `df3a180a438cad8bddb7fed68b6390bc27bae729` (version 1.7.1). TPoS behavior was reviewed at `80e0290fc3939d936674ded918407c5feb056727`. A version number alone does not guarantee that an older core build has these WASM APIs.
 
@@ -16,7 +18,7 @@ The core reference is `lnbits/lnbits` dev commit `df3a180a438cad8bddb7fed68b6390
 - Receipts and order slips through core's print dialog; business name, address and tax ID.
 - Recent terminal sales, paged owner sales, CSV exports of the visible page, and owner payment refresh.
 - Separate Lightning tip wallets and Lightning-address revenue shares, subject to core background-payment grants.
-- A separate customer display with websocket refresh hints and polling; mobile layout and core dark-mode updates.
+- A separate customer display with websocket refresh hints and polling; mobile layout and live core theme updates.
 
 Excluded from this port: on-chain payments, Watchonly, cash recording, NFC/card-reader hardware, ATM/password flows, Inventory/Orders/Tabs integrations, remote image downloads and PWA installation. These need capabilities beyond the supported flow used here. Hosted fiat tips stay in the fiat receiving wallet.
 
@@ -48,7 +50,7 @@ All exports use core's per-owner `sync` lock. This lock is process-local: run on
 
 Work in `<LNbits data folder>/wasm_extensions/pos`. All business logic is in `src/`; `ui/` contains the sandbox UI; `storage/` contains the new schema and JSON migration; `wasm/lnbits-extension.wit` declares the existing host imports. No core changes are required.
 
-Dependencies are pinned in `package.json` and `package-lock.json`: Vue, QRCode, esbuild, Vue's SFC compiler, Jco and ComponentizeJS. The build precompiles Vue templates, bundles local assets and compiles the JavaScript guest into a WASM component. It does not need runtime template evaluation or a CDN. Use Node.js 24.
+Dependencies are pinned in `package.json` and `package-lock.json`: Vue, QRCode, esbuild, Vue's SFC compiler, Jco and ComponentizeJS. The build precompiles Vue templates, bundles local assets and compiles the JavaScript guest into a WASM component. The UI loads core’s Vue, Quasar, Material Icons and LNbits CSS through the allowed asset proxy. It uses standard Quasar controls and follows core’s theme name, colors, dark mode and gradient setting; extension CSS only handles layout. It does not need runtime template evaluation or a CDN. Use Node.js 24.
 
 With a recent Node.js installed, source tests need no npm dependencies:
 
@@ -71,9 +73,9 @@ LNBITS_CORE_PATH=/path/to/lnbits make test-host PYTHON=/path/to/lnbits/.venv/bin
 make package
 ```
 
-`test-host` executes the compiled component against core's actual host imports. It also checks core's query-parameter conversion for payment status. `package` creates `dist/pos-0.1.0.zip` with only the runtime files. Core must install this release ZIP, not a GitHub source ZIP: source includes a Python test helper, which is deliberately excluded from the WASM release. Restart the development server after rebuilding so core warms the new component before serving requests.
+`test-host` executes the compiled component against core's actual host imports. It also checks core's query-parameter conversion for payment status. `package` creates `dist/pos-0.1.0.zip` with only the runtime files. Core must install this release ZIP, not a GitHub source ZIP: source includes a Python test helper, which is deliberately excluded from the WASM release. Reactivate the extension (or restart the development server) after rebuilding so core warms the new component before serving requests.
 
-Verified: `make check` (30 tests), `make build`, `make test-contract` and `make test-host`; HTTP checks through core for private settings, anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
+Verified: `make check` (32 tests), `make build`, `make test-contract` and `make test-host`; HTTP checks through core for private settings, anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
 
 Before production use, finish a manual browser check through the real core wrapper, including desktop/mobile checkout, display updates and print/CSV/payment-permission dialogs. Hosted fiat and external revenue payouts have not been exercised with live providers.
 

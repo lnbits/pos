@@ -1,11 +1,11 @@
 """Component/host integration checks against a local core checkout; no real payments."""
 import asyncio
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -18,6 +18,7 @@ async def check(contracts_only):
     from lnbits.core.helpers import migrate_databases
     from lnbits.core.models.extensions import InstallableExtension
     from lnbits.core.models.payments import Payment
+    from lnbits.core.models.wallets import Wallet
     from lnbits.core.wasm_ext.api.host import ExtensionHostAPI
     from lnbits.core.wasm_ext.api.models import (
         CreateInvoicePublicRequest, InvoiceStatusRequest, StorageGetRequest,
@@ -28,7 +29,7 @@ async def check(contracts_only):
     from lnbits.helpers import sha256s
 
     config = parse_wasm_extension_config("pos", json.loads((ROOT / "config.json").read_text()))
-    installed = InstallableExtension(id="pos", name="PoS", version=config.version, active=True, permissions=config.permissions)
+    installed = InstallableExtension(id="pos", name=config.name, version=config.version, active=True, permissions=config.permissions)
     await migrate_databases()
     await migrate_wasm_extension_database(installed)
     alice = ExtensionHostAPI("pos", config.permissions, user_id="alice")
@@ -41,7 +42,7 @@ async def check(contracts_only):
     await bob.storage_set(StorageSetRequest(table="tip_sources", data={**source, "wallet": "bob_wallet"}))
     assert json.loads((await alice.storage_get(request)).data_json)["wallet"] == "alice_wallet"
 
-    wallets = {f"{owner}_wallet": SimpleNamespace(id=f"{owner}_wallet", source_wallet_id=f"{owner}_wallet", user=owner, name="Test wallet", currency=None) for owner in ["alice", "bob"]}
+    wallets = {f"{owner}_wallet": Wallet(id=f"{owner}_wallet", user=owner, name="Test wallet", adminkey="test-admin", inkey="test-invoice") for owner in ["alice", "bob"]}
     payments = {}
 
     async def create_payment(wallet_id, invoice, *, extension_context):
@@ -57,6 +58,8 @@ async def check(contracts_only):
     with (
         patch("lnbits.core.crud.wallets.get_wallet", AsyncMock(side_effect=lambda wallet_id: wallets.get(wallet_id))),
         patch("lnbits.core.crud.wallets.get_wallets", AsyncMock(side_effect=lambda owner: [w for w in wallets.values() if w.user == owner])),
+        # Newer core moved the wallet list into onchain and imports CRUD eagerly.
+        patch("lnbits.core.wasm_ext.api.onchain.get_wallets", AsyncMock(side_effect=lambda owner: [w for w in wallets.values() if w.user == owner])) if (CORE / "lnbits/core/wasm_ext/api/onchain.py").exists() else nullcontext(),
         patch("lnbits.core.services.payments.create_payment_request", create_payment),
         patch("lnbits.core.crud.payments.get_standalone_payment", AsyncMock(side_effect=lambda payment_hash, **kwargs: payments.get(payment_hash))),
         patch("lnbits.core.services.payments.update_pending_payment", refresh),

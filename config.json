@@ -1,7 +1,7 @@
 {
   "id": "pos",
-  "name": "PoS",
-  "short_description": "Shareable point of sale with products, taxes, tips and Lightning checkout.",
+  "name": "Bolt Till",
+  "short_description": "Your Bitcoin counter. Products, tips and Lightning checkout, powered by LNbits.",
   "version": "0.1.0",
   "min_lnbits_version": "1.7.1",
   "extension_type": "wasm",
@@ -201,7 +201,7 @@
   "permissions": [
     {
       "id": "ext.storage.read",
-      "description": "Read only the current owner's PoS records."
+      "description": "Read only the current owner's Bolt Till records."
     },
     {
       "id": "ext.storage.write",
@@ -227,7 +227,7 @@
     },
     {
       "id": "wallet.invoice_status",
-      "description": "Verify invoices belonging to this PoS checkout."
+      "description": "Verify invoices belonging to this Bolt Till checkout."
     },
     {
       "id": "wallet.payments.refresh",

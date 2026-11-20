@@ -1,4 +1,4 @@
-Third-party software included in PoS
+Third-party software included in Bolt Till
 
 Vue
 The MIT License (MIT)
