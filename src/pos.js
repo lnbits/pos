@@ -1,4 +1,5 @@
 import {InputError, object, identifier, integer, normalizeTerminal, calculateSale, publicTerminal, digits, percent, proportion, fail} from './domain.js';
+import {reserveOnchain,readOnchain,onchainView,onchainFingerprint} from './onchain.js';
 
 // The host scopes every private storage operation to its invocation owner.
 // All state-changing exports additionally use core's per-owner sync lock.
@@ -29,7 +30,7 @@ export function createPos(host) {
   };
   const view = c => {
     const data = payload(c);
-    return {id:c.id,status:c.status,method:c.method,payment_hash:c.payment_hash,payment_request:c.payment_request,amount_sat:data.amount_sat,created_at:c.created_at,sale:data.sale,business:data.business,terminal_name:data.terminal_name};
+    return {id:c.id,status:c.status,method:c.method,payment_hash:c.payment_hash,payment_request:c.payment_request,amount_sat:data.amount_sat,created_at:c.created_at,sale:data.sale,business:data.business,terminal_name:data.terminal_name,...onchainView(c,data)};
   };
   const summary = c => {
     const {id,status,method,created_at,sale}=view(c);
@@ -37,6 +38,16 @@ export function createPos(host) {
     return {id,status,method,created_at,sale:{currency,total_minor,tax_minor,tip_minor}};
   };
   const settle = (c,sendShares=true) => {
+    if (c.method==='onchain') {
+      if (c.status==='creating') return c;
+      const data=payload(c);
+      let update;
+      try { update=readOnchain(host,c,data); }
+      catch (_) { return {...c,onchain_status_unavailable:true}; }
+      const next={...c,status:update.status,data_json:JSON.stringify({...data,onchain:update.receipt})};
+      if (next.status!==c.status || next.data_json!==c.data_json) save('checkouts',next);
+      return next;
+    }
     if (!c.payment_hash) return c;
     const result = host.invoiceStatus(c.payment_hash,c.id);
     if (Number(result.amountMsat) !== c.amount_msat) fail('Payment amount does not match this checkout.');
@@ -122,9 +133,12 @@ export function createPos(host) {
     getTerminal(input) {
       const {row,t,settings}=access(input.link);
       let latest=null;
-      if (row.role==='display' && t.latest_checkout) {
-        const c=checkout(t.latest_checkout,t.id);
-        latest=view(settle(c));
+      const checkoutId=row.role==='display' ? t.latest_checkout : input.checkoutId;
+      if (checkoutId) {
+        const c=checkout(checkoutId,t.id);
+        // Host errors trap the WASM call. Keep saved on-chain receipts readable
+        // while core is syncing; the browser polls checkout-status separately.
+        latest=view(c.method==='onchain' ? {...c,onchain_status_unavailable:c.status!=='paid'} : settle(c));
       }
       return {...publicTerminal(settings),role:row.role,channel:row.role==='display' ? t.display_link : '',latest};
     },
@@ -132,10 +146,15 @@ export function createPos(host) {
       const {t,settings}=access(input.link,true);
       const action=identifier(input.action_id);
       const method=input.method;
-      if (!['lightning','fiat'].includes(method) || (method==='fiat' && !settings.provider)) fail('Payment method is unavailable.');
+      const prior=db.list('checkouts',{terminal_id:t.id,action_id:action},1,0).rows[0];
+      const onchainAttempt=method==='onchain' ? onchainFingerprint(input) : '';
+      if (prior?.method==='onchain') {
+        if (method!=='onchain' || payload(prior).onchain_attempt!==onchainAttempt) fail('Checkout retry does not match the original cart.');
+        return view(prior);
+      }
+      if (!['lightning','fiat','onchain'].includes(method) || (method==='fiat' && !settings.provider) || (method==='onchain' && (!settings.onchain_enabled || !settings.onchain_wallet_id))) fail('Payment method is unavailable.');
       const sale=calculateSale(settings,input);
       const fingerprint=JSON.stringify({method,sale});
-      const prior=db.list('checkouts',{terminal_id:t.id,action_id:action},1,0).rows[0];
       if (prior) {
         if (payload(prior).fingerprint !== fingerprint) fail('Checkout retry does not match the original cart.');
         return view(prior);
@@ -149,20 +168,27 @@ export function createPos(host) {
       const sats=integer(Math.ceil(sale.total_minor / 10**digits(settings.currency) * rate),'Bitcoin amount',1,1e9);
       const tipSats=proportion(sats,sale.tip_minor,sale.total_minor);
       const data={sale:{...sale,exchange_rate:rate},fingerprint,terminal_name:settings.name,amount_sat:sats,
+        ...(method==='onchain' ? {onchain_attempt:onchainAttempt} : {}),
         business:{name:settings.business_name,address:settings.business_address,vat_id:settings.business_vat_id,only_show_sats_on_bitcoin:settings.only_show_sats_on_bitcoin},
         tip:settings.tip_wallet && settings.tip_wallet!==settings.wallet ? {wallet:settings.tip_wallet,amount:tipSats} : null,
         revenue:settings.revenue_address ? {address:settings.revenue_address,amount:proportion(sats-tipSats,percent(settings.revenue_percent),10000)} : null};
-      const c={id:host.id('sale_'),terminal_id:t.id,action_id:action,wallet:method==='fiat' ? settings.fiat_wallet : settings.wallet,provider:method==='fiat' ? settings.provider : '',method,status:'creating',created_at:now,payment_hash:'',payment_request:'',amount_msat:method==='lightning' ? sats*1000 : 0,payouts_json:'{}',data_json:JSON.stringify(data)};
+      const c={id:host.id('sale_'),terminal_id:t.id,action_id:action,wallet:method==='onchain' ? settings.onchain_wallet_id : method==='fiat' ? settings.fiat_wallet : settings.wallet,provider:method==='fiat' ? settings.provider : '',method,status:'creating',created_at:now,payment_hash:'',payment_request:'',amount_msat:method==='lightning' ? sats*1000 : 0,payouts_json:'{}',data_json:JSON.stringify(data)};
       save('checkouts',c);
       t.last_created=now; t.latest_checkout=c.id; save('terminals',t);
       try {
-        const invoice=method==='fiat' ? host.fiatInvoice(c.id,sale.total_minor/10**digits(settings.currency),settings.currency,settings.name) : host.invoice(c.id,sats,'sat',settings.name);
-        c.payment_hash=invoice.paymentHash;
-        c.payment_request=invoice.paymentRequest;
-        if (method==='fiat') c.amount_msat=integer(Number(invoice.amountMsat),'invoice amount',1,Number.MAX_SAFE_INTEGER);
+        if (method==='onchain') {
+          const reservation=reserveOnchain(host,c,settings,sats);
+          c.payment_request=reservation.payment_request;
+          c.data_json=JSON.stringify({...data,onchain:reservation.receipt});
+        } else {
+          const invoice=method==='fiat' ? host.fiatInvoice(c.id,sale.total_minor/10**digits(settings.currency),settings.currency,settings.name) : host.invoice(c.id,sats,'sat',settings.name);
+          c.payment_hash=invoice.paymentHash;
+          c.payment_request=invoice.paymentRequest;
+          if (method==='fiat') c.amount_msat=integer(Number(invoice.amountMsat),'invoice amount',1,Number.MAX_SAFE_INTEGER);
+        }
         c.status='pending'; save('checkouts',c);
       } catch (_) {
-        // The invoice might exist. Keep this attempt; an event can recover it.
+        // The invoice/address might exist. Never allocate again after uncertainty.
         notify(t);
         fail('Checkout creation was not confirmed. Retry this same cart to view its state; do not pay twice.');
       }
@@ -188,7 +214,7 @@ export function createPos(host) {
     reconcile(input) {
       const t=terminal(input.id);
       const c=checkout(input.checkout_id,t.id);
-      if (c.payment_hash && c.status==='pending') host.refreshPayment(c.wallet,c.payment_hash);
+      if (c.method!=='onchain' && c.payment_hash && c.status==='pending') host.refreshPayment(c.wallet,c.payment_hash);
       // Authenticated refresh must not bypass background-payment grants.
       // A paid event or cashier poll handles configured payouts under those grants.
       return {...view(settle(c,false)),payouts:JSON.parse(c.payouts_json)};
@@ -198,7 +224,7 @@ export function createPos(host) {
       const binding=event.payment?.extension_context;
       if (event.extension!=='pos' || !binding || binding.extension_id!=='pos' || event.pending || event.status!=='success') return {ignored:true};
       const c=db.get('checkouts',binding.source_id);
-      if (!c || binding.wallet_id!==event.walletId || (c.payment_hash && c.payment_hash!==event.paymentHash)) return {ignored:true};
+      if (!c || c.method==='onchain' || binding.wallet_id!==event.walletId || (c.payment_hash && c.payment_hash!==event.paymentHash)) return {ignored:true};
       // Recheck the host's immutable source binding, including early-settlement recovery.
       const status=host.invoiceStatus(event.paymentHash,c.id);
       if (!status.paid || status.pending || status.failed) return {ignored:true};

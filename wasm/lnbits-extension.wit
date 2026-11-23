@@ -23,7 +23,8 @@ interface host {
   record fiat-invoice-request { source-id: string, amount: f64, currency: string, memo: string }
   record fiat-invoice-response { payment-hash: string, payment-request: string, amount-msat: s64, fiat-provider: string }
   record providers-response { providers: list<string> }
-  record user-wallet { id: string, name: string, currency: option<string> }
+  record user-wallet { id: string, name: string, currency: option<string>, wallet-type: string, onchain-network: option<string>, receiving-ready: bool }
+  record wallets-request { wallet-type: option<string> }
   record wallets-response { wallets: list<user-wallet> }
   record pay-invoice-request {
     wallet-id: string, payment-request: string, max-sat: option<u64>,
@@ -52,7 +53,7 @@ interface host {
   refresh-payment: func(request: refresh-payment-request) -> refresh-payment-response;
   create-fiat-invoice-public: func(request: fiat-invoice-request) -> fiat-invoice-response;
   list-fiat-providers: func() -> providers-response;
-  list-user-wallets: func() -> wallets-response;
+  list-user-wallets: func(request: wallets-request) -> wallets-response;
   pay-invoice: func(request: pay-invoice-request) -> pay-response;
   pay-lnurl: func(request: pay-lnurl-request) -> pay-response;
   websocket-publish: func(request: publish-request) -> publish-response;
@@ -68,9 +69,19 @@ interface utils-currencies {
   rate: func(request: rate-request) -> rate-response;
 }
 
+interface onchain {
+  record reserve-public-request { table: string, source-id: string, checkout-id: string }
+  record reserve-response { address: string, network: string, status-token: string }
+  record status-request { wallet-id: string, source-id: string, checkout-id: string, address: string, status-token: option<string> }
+  record status-response { received-sat: u64, confirmed-sat: u64, unconfirmed-sat: u64, checked-at: u64 }
+  reserve-address-public: func(request: reserve-public-request) -> reserve-response;
+  payment-status: func(request: status-request) -> status-response;
+}
+
 world pos {
   import host;
   import utils-currencies;
+  import onchain;
   export metadata: func(request-json: string) -> string;
   export list-terminals: func(request-json: string) -> string;
   export terminal-settings: func(request-json: string) -> string;

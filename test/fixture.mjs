@@ -1,7 +1,7 @@
 import {createPos} from '../src/pos.js';
 
 export function fixture() {
-  const h={owner:'alice',clock:100,serial:0,rows:new Map(),invoices:new Map(),payments:[],loseInvoice:false,payPending:false,payThrows:false};
+  const h={owner:'alice',clock:100,serial:0,rows:new Map(),invoices:new Map(),payments:[],loseInvoice:false,payPending:false,payThrows:false,onchainReady:true,reservations:[],onchainTotals:{receivedSat:0n,confirmedSat:0n,unconfirmedSat:0n},onchainUnavailable:false,loseReservation:false};
   const key=(table,id)=>`${table}:${id}`;
   const copy=value=>structuredClone(value);
   const host={
@@ -19,7 +19,7 @@ export function fixture() {
     },
     id:prefix=>`${prefix}${String(++h.serial).padStart(32,'0')}`,
     now:()=>h.clock,
-    wallets:()=>[{id:`${h.owner}_lightning`,name:'Lightning',currency:null},{id:`${h.owner}_tips`,name:'Tips',currency:null},{id:`${h.owner}_fiat`,name:'USD',currency:'USD'}],
+    wallets:()=>[{id:`${h.owner}_lightning`,name:'Lightning',currency:null,wallet_type:'lightning',receiving_ready:true},{id:`${h.owner}_tips`,name:'Tips',currency:null,wallet_type:'lightning',receiving_ready:true},{id:`${h.owner}_fiat`,name:'USD',currency:'USD',wallet_type:'fiat',receiving_ready:true},{id:`${h.owner}_onchain`,name:'Bitcoin',currency:null,wallet_type:'onchain',onchain_network:'Regtest',receiving_ready:h.onchainReady}],
     currencies:()=>['USD','EUR','JPY'],providers:()=>['stripe'],rate:()=>({rate:1000}),
     invoice:(id,amount,currency,memo)=>mint(id,amount*1000,'lnbc'),
     fiatInvoice:(id,amount,currency,memo)=>mint(id,Math.round(amount*1000*1000),'https://checkout.example/'),
@@ -29,6 +29,19 @@ export function fixture() {
       return {paid:p.paid,pending:!p.paid && !p.failed,failed:p.failed,amountMsat:p.amount};
     },
     refreshPayment:()=>{},
+    reserveAddress:(sourceId,checkoutId)=>{
+      const saved=host.db.get('checkouts',checkoutId);
+      if(!saved || saved.terminal_id!==sourceId || saved.wallet!==`${h.owner}_onchain` || !h.onchainReady)throw Error('unavailable wallet');
+      const receipt={address:`bcrt1q${String(++h.serial).padStart(40,'0')}`,network:'Regtest',statusToken:`${checkoutId}.private-status-token`};
+      h.reservations.push({owner:h.owner,walletId:saved.wallet,sourceId,checkoutId,...receipt});
+      if(h.loseReservation)throw Error('secret-core-error');
+      return receipt;
+    },
+    onchainStatus:(walletId,sourceId,checkoutId,address,statusToken)=>{
+      if(h.onchainUnavailable)throw Error('secret-scan-error');
+      if(!h.reservations.some(r=>r.owner===h.owner&&r.walletId===walletId&&r.sourceId===sourceId&&r.checkoutId===checkoutId&&r.address===address&&r.statusToken===statusToken))throw Error('unrelated checkout');
+      return {checkedAt:BigInt(h.clock),...h.onchainTotals};
+    },
     payInvoice:(wallet,invoice,amount)=>pay(wallet,invoice,amount),
     payLnurl:(wallet,address,amount)=>pay(wallet,address,amount),
     publish:()=>{}

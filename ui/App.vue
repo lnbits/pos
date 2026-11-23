@@ -31,13 +31,15 @@ const preview=computed(()=>{
   try{return calculateSale(terminal.value,{items:items.value,tip:tip.value,note:note.value});}catch{return null;}
 });
 const currentCurrency=computed(()=>terminal.value?.currency||'sat');
+const lightningWallets=computed(()=>meta.value.wallets.filter(w=>['lightning','lightning-shared'].includes(w.wallet_type)));
+const onchainWallets=computed(()=>meta.value.wallets.filter(w=>w.wallet_type==='onchain').map(w=>({...w,label:`${w.name} (${w.onchain_network||'not configured'})${w.receiving_ready?'':' — not ready'}`,disable:!w.receiving_ready})));
 function money(value,currency=currentCurrency.value){return `${decimal(value,currency)} ${currency==='sat'?'sats':currency}`;}
 function timestamp(value){return new Date(value*1000).toLocaleString();}
 function clone(value){return JSON.parse(JSON.stringify(value));}
-function blank(){return {name:'',currency:'sat',wallet:'',tip_wallet:'',fiat_wallet:'',provider:'',tax_inclusive:true,tax_default:0,allow_price_adjustment:true,tips_enabled:false,tip_options:[10,15,20],revenue_address:'',revenue_percent:0,business_name:'',business_address:'',business_vat_id:'',only_show_sats_on_bitcoin:true,remote_enabled:false,products:[]};}
+function blank(){return {name:'',currency:'sat',wallet:'',tip_wallet:'',fiat_wallet:'',provider:'',onchain_enabled:false,onchain_wallet_id:'',onchain_zero_conf:false,tax_inclusive:true,tax_default:0,allow_price_adjustment:true,tips_enabled:false,tip_options:[10,15,20],revenue_address:'',revenue_percent:0,business_name:'',business_address:'',business_vat_id:'',only_show_sats_on_bitcoin:true,remote_enabled:false,products:[]};}
 async function run(fn){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{return await fn();}catch(e){error.value=e.message||'Something went wrong.';}finally{busy.value=false;}}
 async function loadAdmin(){[terminals.value,meta.value]=await Promise.all([bridge.api('/terminals'),bridge.api('/metadata')]);}
-async function edit(t){await run(async()=>{editor.value=t?await bridge.api(`/terminals/${encodeURIComponent(t.id)}`):blank();});}
+async function edit(t){await run(async()=>{editor.value=t?{...blank(),...await bridge.api(`/terminals/${encodeURIComponent(t.id)}`)}:blank();});}
 async function save(){await run(async()=>{await bridge.api('/terminals','POST',editor.value);editor.value=null;catalog.value=null;expanded.value=[];await loadAdmin();notice.value='PoS saved.';});}
 async function disable(t){if(!await ask(`Disable ${t.name}? Its shared links will stop working.`))return;await run(async()=>{await bridge.api('/terminals/disable','POST',{id:t.id});await loadAdmin();});}
 async function rotate(t){if(!await ask('Replace both shared links? The old links will stop working.'))return;await run(async()=>{await bridge.api('/terminals/rotate','POST',{id:t.id});await loadAdmin();share.value=null;notice.value='Links replaced.';});}
@@ -67,7 +69,7 @@ async function exportTerminals(){await run(()=>bridge.request('ui.download_csv',
 async function showSales(t){await run(async()=>{salesTerminal.value=t;offset.value=0;await loadSales();});}
 async function loadSales(){sales.value=await bridge.api(`/sales?id=${encodeURIComponent(salesTerminal.value.id)}&offset=${offset.value}`);}
 async function pageSales(delta){await run(async()=>{offset.value=Math.max(0,offset.value+delta);await loadSales();});}
-async function reconcile(c){await run(async()=>{await bridge.api('/sales/reconcile','POST',{id:salesTerminal.value.id,checkout_id:c.id});await loadSales();});}
+async function reconcile(c){await run(async()=>{const result=await bridge.api('/sales/reconcile','POST',{id:salesTerminal.value.id,checkout_id:c.id});await loadSales();if(result.onchain&&!result.onchain.status_available)error.value='Core has not synced this Bitcoin payment yet. Check again after sync.';});}
 async function exportSales(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-sales.csv',columns:['Date','Method','Status','Currency','Total','Tax','Tip'],rows:sales.value.rows.map(c=>[timestamp(c.created_at),c.method,c.status,c.sale.currency,decimal(c.sale.total_minor,c.sale.currency),decimal(c.sale.tax_minor,c.sale.currency),decimal(c.sale.tip_minor,c.sale.currency)])}));}
 
 async function loadTerminal(){
@@ -95,7 +97,7 @@ function startPayment(method=null){
   error.value='';pendingMethod.value=method;
   if(terminal.value.tips_enabled){showRound.value=false;showTips.value=true;}else chooseMethod();
 }
-function chooseMethod(){showTips.value=false;if(pendingMethod.value)checkout(pendingMethod.value);else if(terminal.value.fiat_enabled)showMethods.value=true;else checkout('lightning');}
+function chooseMethod(){showTips.value=false;if(pendingMethod.value)checkout(pendingMethod.value);else if(terminal.value.fiat_enabled||terminal.value.onchain_enabled)showMethods.value=true;else checkout('lightning');}
 function tipSelected(pct){setTip(pct);chooseMethod();}
 function roundSelected(){error.value='';roundTotal();if(!error.value)chooseMethod();}
 function pay(method){showMethods.value=false;checkout(method);}
@@ -116,8 +118,9 @@ async function poll(){
   if(polling||busy.value||!isPublic.value||!terminal.value)return;polling=true;
   try {
     if(terminal.value.role==='display')await loadTerminal();
-    else if(invoice.value?.id)await setInvoice(await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(invoice.value.id)}`));
-  }catch(e){error.value=e.message;}finally{polling=false;}
+    if(invoice.value?.id&&(terminal.value.role!=='display'||invoice.value.method==='onchain'))await setInvoice(await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(invoice.value.id)}`));
+    if(invoice.value?.onchain?.status_available)error.value='';
+  }catch(e){if(invoice.value?.onchain){invoice.value.onchain.status_available=false;error.value='Core could not check this Bitcoin payment yet. Keep this checkout and retry after sync.';}else error.value=e.message;}finally{polling=false;}
 }
 async function closeCheckout(){
   if(receiptOnly.value){receiptOnly.value=false;await setInvoice(previousCheckout);previousCheckout=null;return;}
@@ -125,7 +128,7 @@ async function closeCheckout(){
   if(await ask('This checkout may still be paid. Start a separate sale? You can find this one in Receipts.'))await clearCart();
 }
 async function recent(){await run(async()=>{history.value=await bridge.api(`/terminal/${link.value}/history`);showHistory.value=true;});}
-async function viewReceipt(c){await run(async()=>{const receipt=await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(c.id)}`);previousCheckout=invoice.value;receiptOnly.value=true;showHistory.value=false;await setInvoice(receipt);});}
+async function viewReceipt(c){await run(async()=>{const receipt=c.method==='onchain'?(await bridge.api(`/terminal/${link.value}?checkoutId=${encodeURIComponent(c.id)}`)).latest:await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(c.id)}`);previousCheckout=invoice.value;receiptOnly.value=true;showHistory.value=false;await setInvoice(receipt);});}
 async function hold(){await run(async()=>{
   if(!items.value.length)throw Error('Add something to the cart first.');
   held.value=await local.hold({items:clone(items.value),tip:tip.value,note:note.value},new Date().toLocaleTimeString());await clearCart();notice.value='Cart held on this device.';
@@ -136,7 +139,7 @@ async function removeHeld(id){await run(async()=>{await local.remove(id);held.va
 async function print(c,order=false){await run(async()=>{
   const s=c.sale,b=c.business;
   const lines=[timestamp(c.created_at),c.terminal_name,`Payment: ${c.method} · ${c.status}`,b.name,b.address,b.vat_id?`VAT: ${b.vat_id}`:'',s.note].filter(Boolean);
-  if(!order){lines.push(`Subtotal: ${money(s.subtotal_minor,s.currency)}`,`Tax${s.tax_inclusive?' (included)':''}: ${money(s.tax_minor,s.currency)}`,`Tip: ${money(s.tip_minor,s.currency)}`,`Total: ${money(s.total_minor,s.currency)}`);if(c.method==='lightning'||!b.only_show_sats_on_bitcoin)lines.push(`Bitcoin amount: ${c.amount_sat} sats`);}
+  if(!order){lines.push(`Subtotal: ${money(s.subtotal_minor,s.currency)}`,`Tax${s.tax_inclusive?' (included)':''}: ${money(s.tax_minor,s.currency)}`,`Tip: ${money(s.tip_minor,s.currency)}`,`Total: ${money(s.total_minor,s.currency)}`);if(c.method==='lightning'||c.method==='onchain'||!b.only_show_sats_on_bitcoin)lines.push(`Bitcoin amount: ${c.amount_sat} sats`);if(c.onchain)lines.push(`Network: ${c.onchain.network}`,`Address: ${c.onchain.address}`);}
   await bridge.request('ui.print_document',{title:order?'Order':'Receipt',lines,columns:order?['Item','Quantity','Note']:['Item','Quantity','Unit price','Note'],rows:s.items.map(l=>order?[l.title,l.quantity,l.note]:[l.title,l.quantity,money(l.price_minor,s.currency),l.note])});
 });}
 onMounted(async()=>{
@@ -200,6 +203,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
         <div class="row justify-between text-h6"><span>Total</span><span>{{money(preview?.total_minor||0)}}</span></div>
         <div class="row q-col-gutter-sm">
           <div class="col"><q-btn rounded unelevated color="primary" icon="bolt" :label="cashierAttempt?'Check / retry':'Lightning'" class="full-width payment-button" @click="startPayment('lightning')" :disable="busy||!preview" /></div>
+          <div v-if="terminal.onchain_enabled&&!cashierAttempt" class="col"><q-btn rounded unelevated color="primary" icon="currency_bitcoin" label="On-chain" class="full-width payment-button" @click="startPayment('onchain')" :disable="busy||!preview" /></div>
           <div v-if="terminal.fiat_enabled&&!cashierAttempt" class="col"><q-btn rounded unelevated color="secondary" icon="qr_code" :label="currentCurrency" class="full-width payment-button" @click="startPayment('fiat')" :disable="busy||!preview" /></div>
         </div>
         <q-btn color="negative" outline class="full-width" label="Clear cart" @click="clearCart" :disable="busy||!!cashierAttempt||!items.length" />
@@ -325,16 +329,25 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
       <q-card-section class="row items-center justify-between"><h2 class="text-h6 q-ma-none">{{editor.id?'Edit PoS':'Create PoS'}}</h2><q-btn flat round dense icon="close" @click="editor=null" aria-label="Close" :disable="busy" /></q-card-section>
       <q-card-section class="col scroll q-gutter-y-md">
         <q-input filled dense v-model="editor.name" maxlength="80" label="Name *" />
-        <q-select filled dense v-model="editor.wallet" :options="meta.wallets" option-label="name" option-value="id" emit-value map-options label="Wallet *" />
+        <q-select filled dense v-model="editor.wallet" :options="lightningWallets" option-label="name" option-value="id" emit-value map-options label="Wallet *" />
         <q-select filled dense v-model="editor.currency" :options="meta.currencies" label="Currency *" />
         <q-list bordered separator class="rounded-borders">
           <q-expansion-item icon="payments" label="Payment methods" caption="Lightning and hosted card payments"><div class="q-pa-md q-gutter-y-md">
             <q-select filled dense v-model="editor.provider" :options="[{label:'Disabled',value:''},...meta.providers.map(p=>({label:p,value:p}))]" emit-value map-options label="Fiat provider" :disable="editor.currency==='sat'" />
-            <q-select v-if="editor.provider" filled dense v-model="editor.fiat_wallet" :options="meta.wallets.filter(w=>w.currency?.toUpperCase()===editor.currency)" option-label="name" option-value="id" emit-value map-options label="Fiat Wallet" />
+            <q-select v-if="editor.provider" filled dense v-model="editor.fiat_wallet" :options="meta.wallets.filter(w=>w.wallet_type==='fiat'&&w.currency?.toUpperCase()===editor.currency)" option-label="name" option-value="id" emit-value map-options label="Fiat Wallet" />
+          </div></q-expansion-item>
+          <q-expansion-item icon="currency_bitcoin" label="On-chain payments" :caption="editor.onchain_enabled?'Enabled':'Disabled'"><div class="q-pa-md q-gutter-y-md">
+            <q-checkbox v-model="editor.onchain_enabled" label="Enable on-chain payments" />
+            <template v-if="editor.onchain_enabled">
+              <q-select filled dense v-model="editor.onchain_wallet_id" :options="onchainWallets" option-label="label" option-value="id" emit-value map-options label="On-chain wallet *" hint="A fresh receive address is reserved for each checkout." />
+              <p v-if="!onchainWallets.length" class="text-caption">Create an on-chain wallet in LNbits first.</p>
+              <q-toggle v-model="editor.onchain_zero_conf" label="Accept on-chain payment at 0-conf"><q-tooltip>When disabled, wait for the first confirmation.</q-tooltip></q-toggle>
+              <p class="text-caption">On-chain tips stay in this wallet. Revenue sharing applies to Lightning sales only.</p>
+            </template>
           </div></q-expansion-item>
           <q-expansion-item icon="volunteer_activism" label="Tips" :caption="editor.tips_enabled?'Enabled':'Disabled'"><div class="q-pa-md q-gutter-y-md">
             <q-checkbox v-model="editor.tips_enabled" label="Enable tips" />
-            <template v-if="editor.tips_enabled"><q-select filled dense v-model="editor.tip_wallet" :options="[{id:'',name:'Keep tips in receiving wallet'},...meta.wallets]" option-label="name" option-value="id" emit-value map-options label="Tip Wallet" />
+            <template v-if="editor.tips_enabled"><q-select filled dense v-model="editor.tip_wallet" :options="[{id:'',name:'Keep tips in receiving wallet'},...lightningWallets]" option-label="name" option-value="id" emit-value map-options label="Tip Wallet" />
               <q-select filled dense multiple use-input use-chips hide-dropdown-icon v-model="editor.tip_options" new-value-mode="add-unique" inputmode="numeric" label="Tip % Options (hit enter to add values)" />
               <p class="text-caption">Separate Lightning tips require payment permission. Fiat tips stay in the fiat wallet.</p>
             </template>
@@ -400,7 +413,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
     <p v-if="error" class="text-negative" role="alert">{{error}}</p>
     <q-card-actions><q-btn flat color="primary" label="No, thanks" @click="tipSelected(0)" /><q-space /><q-btn flat color="grey" label="Close" v-close-popup /></q-card-actions>
   </q-card></q-dialog>
-  <q-dialog v-model="showMethods" position="top"><q-card class="lnbits__dialog-card q-pa-lg"><div class="row q-col-gutter-md"><div class="col"><q-btn rounded unelevated color="primary" icon="bolt" label="Lightning" class="full-width payment-button" @click="pay('lightning')" /></div><div class="col"><q-btn rounded unelevated color="secondary" icon="qr_code" :label="currentCurrency" class="full-width payment-button" @click="pay('fiat')" /></div></div><q-card-actions align="right"><q-btn flat color="grey" label="Close" v-close-popup /></q-card-actions></q-card></q-dialog>
+  <q-dialog v-model="showMethods" position="top"><q-card class="lnbits__dialog-card q-pa-lg"><div class="row q-col-gutter-md"><div class="col"><q-btn rounded unelevated color="primary" icon="bolt" label="Lightning" class="full-width payment-button" @click="pay('lightning')" /></div><div v-if="terminal.onchain_enabled" class="col"><q-btn rounded unelevated color="primary" icon="currency_bitcoin" label="On-chain" class="full-width payment-button" @click="pay('onchain')" /></div><div v-if="terminal.fiat_enabled" class="col"><q-btn rounded unelevated color="secondary" icon="qr_code" :label="currentCurrency" class="full-width payment-button" @click="pay('fiat')" /></div></div><q-card-actions align="right"><q-btn flat color="grey" label="Close" v-close-popup /></q-card-actions></q-card></q-dialog>
 
   <q-dialog :model-value="!!share" position="top" @update:model-value="share=null">
     <q-card v-if="share" class="lnbits__dialog-card">
@@ -424,18 +437,25 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
       <q-card-section class="text-center">
         <p v-if="error" class="text-negative" role="alert">{{error}}</p>
         <div v-if="invoice.status==='paid'" class="q-mb-md"><q-icon name="check_circle" color="positive" size="xl" /></div>
-        <img v-if="invoice.status==='pending'&&invoiceQr" class="qr q-mb-md" :src="invoiceQr" :alt="invoice.method==='lightning'?'Lightning invoice QR code':'Card checkout QR code'">
+        <q-badge v-if="invoice.onchain" color="primary" class="q-mb-md">Bitcoin · {{invoice.onchain.network}}</q-badge>
+        <img v-if="invoice.status==='pending'&&invoiceQr" class="qr q-mb-md" :src="invoiceQr" :alt="invoice.method==='onchain'?'Bitcoin payment QR code':invoice.method==='lightning'?'Lightning invoice QR code':'Card checkout QR code'">
         <div class="text-h4 q-my-md">{{money(invoice.sale.total_minor,invoice.sale.currency)}}</div>
-        <p v-if="invoice.method==='lightning'&&invoice.sale.currency!=='sat'">{{invoice.amount_sat.toLocaleString()}} sats</p>
+        <p v-if="(invoice.method==='lightning'||invoice.method==='onchain')&&invoice.sale.currency!=='sat'">{{invoice.amount_sat.toLocaleString()}} sats</p>
+        <template v-if="invoice.onchain">
+          <q-input filled dense readonly :model-value="invoice.onchain.address" label="Bitcoin address" @focus="$event.target.select()" />
+          <p v-if="invoice.onchain.status_available" class="q-mt-md">Received: {{invoice.onchain.received_sat}} sats · Confirmed: {{invoice.onchain.confirmed_sat}} sats</p>
+          <p v-else class="q-mt-md" role="status">Payment status is unavailable while core syncs. Keep this checkout and check again.</p>
+          <p v-if="invoice.status==='pending'">{{invoice.onchain.zero_conf?'Unconfirmed payments are accepted.':'Waiting for the full amount and one confirmation.'}}</p>
+        </template>
         <template v-if="invoice.status==='pending'">
-          <q-input filled dense readonly :model-value="invoice.payment_request" label="Payment request" @focus="$event.target.select()" />
+          <q-input v-if="invoice.method!=='onchain'" filled dense readonly :model-value="invoice.payment_request" label="Payment request" @focus="$event.target.select()" />
           <q-btn v-if="invoice.method==='fiat'" flat color="primary" icon-right="open_in_new" label="Open checkout" class="q-mt-md" @click="open(invoice.payment_request)" :disable="busy" />
         </template>
-        <p v-if="invoice.status==='creating'">The provider has not confirmed this checkout. Check with the terminal owner before paying again.</p>
+        <p v-if="invoice.status==='creating'">{{invoice.method==='onchain'?'The address reservation was not confirmed. Ask the owner to review it before starting another sale.':'The provider has not confirmed this checkout. Check with the terminal owner before paying again.'}}</p>
         <p v-if="invoice.status==='paid'">Thank you for your purchase.</p><p v-if="invoice.status==='failed'">Payment was not confirmed. Check the sale before starting again.</p>
       </q-card-section>
       <q-card-actions v-if="terminal?.role!=='display'" align="center">
-        <q-btn v-if="invoice.status==='pending'" outline color="grey" :label="invoice.method==='lightning'?'Copy invoice':'Copy URL'" @click="copy(invoice.payment_request)" :disable="busy" />
+        <q-btn v-if="invoice.status==='pending'" outline color="grey" :label="invoice.onchain?'Copy address':invoice.method==='lightning'?'Copy invoice':'Copy URL'" @click="copy(invoice.onchain?.address||invoice.payment_request)" :disable="busy" />
         <q-btn flat label="Print order" @click="print(invoice,true)" :disable="busy" /><q-btn v-if="invoice.status==='paid'" flat label="Print receipt" @click="print(invoice)" :disable="busy" />
         <q-btn v-if="invoice.status==='paid'||invoice.status==='failed'" color="primary" :label="receiptOnly?'Close receipt':'Next sale'" @click="closeCheckout" /><template v-else><q-btn flat label="Check status" @click="poll" :disable="busy" /><q-btn flat color="grey" label="Close" @click="closeCheckout" /></template>
       </q-card-actions>
