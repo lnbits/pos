@@ -4,9 +4,11 @@
 
 **Your Bitcoin counter.** A fresh point-of-sale extension, based on the features of [TPoS](https://github.com/lnbits/tpos) that current core exposes to WASM. Extension ID: `pos`. No TPoS database or Watchonly dependency.
 
-**Development status:** the WASM component and browser assets build successfully. Source tests and compiled-component checks pass against the core commit below. Manual visual checks remain pending because the browser-control tool failed before navigation. Treat this as a development release.
+**Development status:** the WASM component and browser assets build successfully. Source tests and compiled-component checks pass against the core commit below. Manual visual checks remain pending. Treat this as a development release.
 
-The theme update was also checked against local core commit `0edc6270bcee36c4fc67ee1d0f41f4dfceda88fb`, including compiled host calls and owner isolation. Browser visual checks remain unverified.
+The TPoS-style interface was checked against local core commit `890f0aa9e`, including compiled host calls and owner isolation. Visual browser checks remain pending approval to open a disposable demo account.
+
+The owner screen follows TPoS's terminal table, expandable Items table and settings sections. The cashier uses the same four-column keypad with implicit decimal entry, product grid/list, right-hand cart, options menu and tip flow. PoS keeps its own name and logo and uses core's theme. Only supported payment methods are shown.
 
 The core reference is `lnbits/lnbits` dev commit `df3a180a438cad8bddb7fed68b6390bc27bae729` (version 1.7.1). TPoS behavior was reviewed at `80e0290fc3939d936674ded918407c5feb056727`. A version number alone does not guarantee that an older core build has these WASM APIs.
 
@@ -80,7 +82,7 @@ make package
 
 `test-ui` executes core's real Vue and Quasar scripts in entrypoint order with small browser stubs. It catches startup failures such as loading Quasar before `document.body` exists, and checks dark/light mode with origin storage unavailable. It does not replace visual browser checks.
 
-Verified: `make check` (32 tests), `make build`, `make test-contract` and `make test-host`; HTTP checks through core for private settings, anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
+Verified: `make check` (35 tests), `make package`, `make test-ui` and `make test-host`; HTTP checks for the local owner page, metadata and terminal list, with served UI assets matching the build. Earlier HTTP checks also covered anonymous checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
 
 Before production use, finish a manual browser check through the real core wrapper, including desktop/mobile checkout, display updates and print/CSV/payment-permission dialogs. Hosted fiat and external revenue payouts have not been exercised with live providers.
 

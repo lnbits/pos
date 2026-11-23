@@ -1,6 +1,7 @@
 """Component/host integration checks against a local core checkout; no real payments."""
 import asyncio
 from contextlib import nullcontext
+from importlib import import_module
 import json
 import os
 from pathlib import Path
@@ -55,11 +56,13 @@ async def check(contracts_only):
         payment.status = "success"
         return payment
 
+    onchain = import_module("lnbits.core.wasm_ext.api.onchain") if (CORE / "lnbits/core/wasm_ext/api/onchain.py").exists() else None
+    owned_wallets = AsyncMock(side_effect=lambda owner, **kwargs: [w for w in wallets.values() if w.user == owner])
     with (
         patch("lnbits.core.crud.wallets.get_wallet", AsyncMock(side_effect=lambda wallet_id: wallets.get(wallet_id))),
-        patch("lnbits.core.crud.wallets.get_wallets", AsyncMock(side_effect=lambda owner: [w for w in wallets.values() if w.user == owner])),
-        # Newer core moved the wallet list into onchain and imports CRUD eagerly.
-        patch("lnbits.core.wasm_ext.api.onchain.get_wallets", AsyncMock(side_effect=lambda owner: [w for w in wallets.values() if w.user == owner])) if (CORE / "lnbits/core/wasm_ext/api/onchain.py").exists() else nullcontext(),
+        patch("lnbits.core.crud.wallets.get_wallets", owned_wallets),
+        # Some dev commits imported this eagerly before moving it back to host.
+        patch.object(onchain, "get_wallets", owned_wallets) if hasattr(onchain, "get_wallets") else nullcontext(),
         patch("lnbits.core.services.payments.create_payment_request", create_payment),
         patch("lnbits.core.crud.payments.get_standalone_payment", AsyncMock(side_effect=lambda payment_hash, **kwargs: payments.get(payment_hash))),
         patch("lnbits.core.services.payments.update_pending_payment", refresh),

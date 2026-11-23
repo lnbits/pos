@@ -81,8 +81,8 @@ export function createPos(host) {
     },
     listTerminals() {
       return db.list('terminals',{},100,0).rows.map(t=>{
-        const {name,currency,provider,tips_enabled,tip_wallet,revenue_address,remote_enabled,wallet,products}=payload(t);
-        return {name,currency,provider,tips_enabled,tip_wallet,revenue_address,remote_enabled,wallet,product_count:products.length,id:t.id,active:t.active,cashier_link:t.cashier_link,display_link:t.display_link};
+        const {name,currency,provider,tips_enabled,tip_wallet,revenue_address,revenue_percent,remote_enabled,wallet,products}=payload(t);
+        return {name,currency,provider,tips_enabled,tip_wallet,revenue_address,revenue_percent,remote_enabled,wallet,product_count:products.length,id:t.id,active:t.active,cashier_link:t.cashier_link,display_link:t.display_link};
       });
     },
     terminalSettings(input) {
