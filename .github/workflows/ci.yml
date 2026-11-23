@@ -1,0 +1,143 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  check:
+    name: JavaScript checks and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - run: make check
+
+  package:
+    name: Build, package, and test with core
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      LNBITS_CORE_PATH: ${{ github.workspace }}/.ci/lnbits
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Check versions and release tag
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import {readFileSync} from 'node:fs';
+          const [config, pkg, lock] = ['config.json', 'package.json', 'package-lock.json']
+            .map(file => JSON.parse(readFileSync(file, 'utf8')));
+          for (const version of [pkg.version, lock.version, lock.packages[''].version]) {
+            assert.equal(version, config.version, 'Package versions must match config.json');
+          }
+          if (process.env.RELEASE_TAG) assert.equal(process.env.RELEASE_TAG, `v${config.version}`);
+          JS
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build WASM, UI, and installable ZIP
+        # The check job already ran the source checks and unit tests.
+        run: make package -o check
+
+      - name: Check committed browser assets are current
+        run: git diff --exit-code -- static/app.js static/app.css THIRD_PARTY_NOTICES.txt
+
+      - name: Checkout compatible LNbits core
+        uses: actions/checkout@v7
+        with:
+          repository: lnbits/lnbits
+          # Includes reserve_address_public and on-chain status bigint bindings.
+          ref: 4cfe9e6e471e71a3087b74d1c776b74054b4822a
+          path: .ci/lnbits
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          python-version: '3.12'
+          working-directory: .ci/lnbits
+          cache-dependency-glob: uv.lock
+
+      - name: Install locked core dependencies
+        working-directory: .ci/lnbits
+        run: uv sync --locked --no-dev
+
+      - name: Check core Vue and Quasar startup
+        run: make test-ui
+
+      - name: Test the installable ZIP against core
+        env:
+          POS_ARTIFACT_ROOT: ${{ runner.temp }}/pos-package/pos
+        run: |
+          unzip -q dist/pos-*.zip -d "$RUNNER_TEMP/pos-package"
+          make test-host PYTHON="$LNBITS_CORE_PATH/.venv/bin/python"
+
+      - name: Checksum package
+        working-directory: dist
+        run: sha256sum pos-*.zip > SHA256SUMS
+
+      - name: Upload tested package
+        uses: actions/upload-artifact@v7
+        with:
+          name: pos-package
+          path: |
+            dist/pos-*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish tagged release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'lnbits/pos'
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: pos-package
+          path: dist
+
+      - name: Publish tested ZIP and checksum
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum --check SHA256SUMS
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "$RELEASE_TAG" --generate-notes \
+            pos-*.zip SHA256SUMS
