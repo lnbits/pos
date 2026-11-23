@@ -59,16 +59,20 @@ export function normalizeTerminal(input, currencies, wallets) {
   object(input);
   const currency = input.currency === 'sat' ? 'sat' : text(input.currency, 'currency', 3, true).toUpperCase();
   if (currency !== 'sat' && !currencies.includes(currency)) fail('Unsupported currency.');
-  const ownWallet = (id, required) => {
+  const ownWallet = (id, required, types) => {
     if (!id && !required) return '';
-    if (!wallets.some(w => w.id === id)) fail('Select one of your wallets.');
+    if (!wallets.some(w => w.id === id && types.includes(w.wallet_type))) fail('Select one of your wallets of the correct type.');
     return id;
   };
-  const wallet = ownWallet(input.wallet, true);
-  const tipWallet = ownWallet(input.tip_wallet, false);
+  const wallet = ownWallet(input.wallet, true, ['lightning','lightning-shared']);
+  const tipWallet = ownWallet(input.tip_wallet, false, ['lightning','lightning-shared']);
   const provider = text(input.provider, 'provider', 30);
-  const fiatWallet = provider ? ownWallet(input.fiat_wallet, true) : '';
+  const fiatWallet = provider ? ownWallet(input.fiat_wallet, true, ['fiat']) : '';
   if (provider && (currency === 'sat' || wallets.find(w => w.id === fiatWallet)?.currency?.toUpperCase() !== currency)) fail('Select a receiving wallet in the terminal currency.');
+  const onchainEnabled = input.onchain_enabled === true;
+  const onchainId = onchainEnabled ? ownWallet(input.onchain_wallet_id, true, ['onchain']) : '';
+  const onchainWallet = wallets.find(w => w.id === onchainId);
+  if (onchainEnabled && (onchainWallet?.receiving_ready !== true || !onchainWallet.onchain_network)) fail('Select an on-chain wallet that is ready to receive.');
   const revenueAddress = text(input.revenue_address, 'Lightning address', 254);
   if (revenueAddress && !/^[^\s@]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(revenueAddress)) fail('Enter a Lightning address.');
   const tips = input.tip_options ?? [10,15,20];
@@ -89,6 +93,7 @@ export function normalizeTerminal(input, currencies, wallets) {
   });
   const result = {
     name:text(input.name,'terminal name',80,true), currency, wallet, tip_wallet:tipWallet,
+    onchain_enabled:onchainEnabled, onchain_wallet_id:onchainId, onchain_network:onchainEnabled ? onchainWallet.onchain_network : '', onchain_zero_conf:input.onchain_zero_conf === true,
     fiat_wallet:fiatWallet, provider, tax_inclusive:input.tax_inclusive !== false,
     tax_default:percent(input.tax_default)/100, allow_price_adjustment:input.allow_price_adjustment !== false,
     tips_enabled:input.tips_enabled === true, tip_options:tips.map(n => percent(n,'tip percentage')/100),
@@ -129,7 +134,7 @@ export function calculateSale(terminal, input) {
 
 export function publicTerminal(t) {
   const {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin} = t;
-  return {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin,fiat_enabled:!!t.provider};
+  return {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin,fiat_enabled:!!t.provider,onchain_enabled:t.onchain_enabled===true,onchain_network:t.onchain_enabled ? t.onchain_network : ''};
 }
 
 export function fail(message) { throw new InputError(message); }

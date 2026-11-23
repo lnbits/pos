@@ -1,5 +1,6 @@
 import {storageGet,storageSet,storageGetPaginated,createInvoicePublic,invoiceStatus,refreshPayment,createFiatInvoicePublic,listFiatProviders,listUserWallets,payInvoice,payLnurl,websocketPublish,randomId,now} from 'lnbits:extension/host';
 import {listCurrencies,rate} from 'lnbits:extension/utils-currencies';
+import {reserveAddressPublic,paymentStatus} from 'lnbits:extension/onchain';
 import {createPos,invoke} from './pos.js';
 
 const pos=createPos({
@@ -13,10 +14,12 @@ const pos=createPos({
   },
   id:prefix=>randomId({prefix}).id,
   now:()=>Number(now().timestamp),
-  wallets:()=>listUserWallets().wallets,
+  wallets:()=>listUserWallets({walletType:undefined}).wallets.map(w=>({id:w.id,name:w.name,currency:w.currency,wallet_type:w.walletType,onchain_network:w.onchainNetwork,receiving_ready:w.receivingReady})),
   currencies:()=>listCurrencies().currencies,
   providers:()=>listFiatProviders().providers,
   rate:currency=>rate({currency}),
+  reserveAddress:(sourceId,checkoutId)=>reserveAddressPublic({table:'checkouts',sourceId,checkoutId}),
+  onchainStatus:(walletId,sourceId,checkoutId,address,statusToken)=>paymentStatus({walletId,sourceId,checkoutId,address,statusToken}),
   invoice:(sourceId,amount,currency,memo)=>createInvoicePublic({sourceId,amount,currency,memo,extra:[],descriptionHash:undefined,unhashedDescription:undefined}),
   invoiceStatus:(paymentHash,sourceId)=>invoiceStatus({paymentHash,sourceId}),
   refreshPayment:(walletId,checkingId)=>refreshPayment({walletId,checkingId}),

@@ -2,8 +2,8 @@
   "id": "pos",
   "name": "PoS",
   "tile": "/pos/static/assets/icon.png",
-  "short_description": "Your Bitcoin counter. Products, tips and Lightning checkout, powered by LNbits.",
-  "version": "0.1.0",
+  "short_description": "Your Bitcoin counter. Products, tips, Lightning and on-chain checkout, powered by LNbits.",
+  "version": "0.2.0",
   "min_lnbits_version": "1.7.1",
   "extension_type": "wasm",
   "wasm": {
@@ -229,6 +229,21 @@
     {
       "id": "wallet.invoice_status",
       "description": "Verify invoices belonging to this PoS checkout."
+    },
+    {
+      "id": "onchain.reserve_address_public",
+      "description": "Reserve an address in the owner's core on-chain wallet for a saved PoS checkout.",
+      "policies": [
+        {
+          "table": "checkouts",
+          "wallet_field": "wallet",
+          "source_id_field": "terminal_id"
+        }
+      ]
+    },
+    {
+      "id": "onchain.payments.read",
+      "description": "Check received and confirmed amounts for PoS addresses using private checkout tokens."
     },
     {
       "id": "wallet.payments.refresh",

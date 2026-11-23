@@ -2,6 +2,7 @@ PYTHON ?= python3
 .PHONY: check test build package test-host test-contract test-ui
 check:
 	node --check src/domain.js
+	node --check src/onchain.js
 	node --check src/pos.js
 	node --check src/index.js
 	node --check ui/bridge.js
