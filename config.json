@@ -37,6 +37,26 @@
         "sync": true
       },
       {
+        "name": "delete-terminal",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "sale-receipt",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "sales-rate",
+        "visibility": "authenticated",
+        "sync": true
+      },
+      {
+        "name": "history-rate",
+        "visibility": "public",
+        "sync": true
+      },
+      {
         "name": "rotate-links",
         "visibility": "authenticated",
         "sync": true
@@ -127,6 +147,33 @@
       "path": "/terminals/disable",
       "export": "disable-terminal",
       "auth": "user"
+    },
+    {
+      "method": "POST",
+      "path": "/terminals/delete",
+      "export": "delete-terminal",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/sales/{checkout_id}",
+      "export": "sale-receipt",
+      "auth": "user",
+      "path_params": {"checkout_id": "checkoutId"}
+    },
+    {
+      "method": "GET",
+      "path": "/sales-rate",
+      "export": "sales-rate",
+      "auth": "user"
+    },
+    {
+      "method": "GET",
+      "path": "/terminal/{link}/history-rate",
+      "export": "history-rate",
+      "auth": "public",
+      "path_params": {"link": "link"},
+      "ownerContext": {"table": "links", "idParam": "link"}
     },
     {
       "method": "POST",

@@ -159,6 +159,79 @@ test('every public route resolves a source owner, every mutating export shares a
   for(const r of c.api_routes.filter(r=>r.auth==='public')) assert.deepEqual(r.ownerContext,{table:'links',idParam:'link'});
   for(const e of c.wasm.exports) assert.equal(e.sync,true);
   assert.equal(c.api_routes.some(r=>r.export==='record-payment'),false);
+  for(const name of ['delete-terminal','sale-receipt','sales-rate']) {
+    assert.equal(c.wasm.exports.find(e=>e.name===name).visibility,'authenticated');
+    assert.ok(c.api_routes.filter(r=>r.export===name).every(r=>r.auth==='user'));
+  }
+});
+
+test('deleting a terminal revokes links but retains owner receipts and pending payments',()=>{
+  const h=fixture(),t=h.create({remote_enabled:true}),sale=h.pos.createCheckout(h.sale(t));
+  const next=h.pos.rotateLinks({id:t.id});
+  h.pos.deleteTerminal({id:t.id});
+  assert.deepEqual(h.pos.listTerminals(),[]);
+  for(const link of [t.cashier_link,t.display_link,next.cashier_link,next.display_link]) {
+    assert.throws(()=>h.pos.getTerminal({link}));
+    assert.throws(()=>h.pos.historyRate({link,currency:'USD'}));
+  }
+  assert.throws(()=>h.pos.saveTerminal({...h.input(),id:t.id}));
+  assert.equal(h.pos.sales({}).rows[0].id,sale.id);
+  assert.equal(h.pos.saleReceipt({checkoutId:sale.id}).sale.items[0].title,'Coffee');
+  h.markPaid(sale.payment_hash);
+  assert.equal(h.pos.recordPayment(h.event(sale.payment_hash)).recorded,true);
+  assert.equal(h.pos.reconcile({checkout_id:sale.id}).status,'paid');
+  assert.equal(h.pos.saleReceipt({checkoutId:sale.id}).status,'paid');
+});
+
+test('deletion, all-sales listing and retained receipts remain owner-scoped',()=>{
+  const h=fixture(),a=h.create(),sale=h.pos.createCheckout(h.sale(a));
+  h.owner='bob';const b=h.create();
+  assert.throws(()=>h.pos.deleteTerminal({id:a.id}));
+  assert.throws(()=>h.pos.saleReceipt({checkoutId:sale.id}));
+  assert.throws(()=>h.pos.reconcile({checkout_id:sale.id}));
+  assert.equal(h.pos.sales({}).total,0);
+  h.owner='alice';h.pos.deleteTerminal({id:a.id});h.owner='bob';
+  assert.throws(()=>h.pos.saleReceipt({checkoutId:sale.id}));
+  assert.deepEqual(h.pos.listTerminals().map(t=>t.id),[b.id]);
+});
+
+test('failed deletion leaves the terminal disabled and links unusable',()=>{
+  const h=fixture(),t=h.create({remote_enabled:true});
+  h.host.db.delete=()=>{throw Error('Storage unavailable');};
+  assert.throws(()=>h.pos.deleteTerminal({id:t.id}));
+  assert.equal(h.pos.listTerminals()[0].active,false);
+  assert.throws(()=>h.pos.getTerminal({link:t.cashier_link}));
+  assert.throws(()=>h.pos.getTerminal({link:t.display_link}));
+});
+
+test('append imports use the saved catalog and settings under the owner lock',()=>{
+  const h=fixture(),t=h.create();h.pos.disableTerminal({id:t.id});
+  const product={id:'product_02',title:'Tea',price:'50',categories:['Drinks']};
+  const result=h.pos.saveTerminal({id:t.id,append_products:[product],wallet:'bob_lightning',name:'Forged'});
+  assert.deepEqual(result.products.map(p=>p.title),['Coffee','Tea']);
+  assert.equal(result.wallet,'alice_lightning');assert.equal(result.name,'Cafe');assert.equal(result.active,false);
+  assert.throws(()=>h.pos.saveTerminal({id:t.id,append_products:[product]}),/unique/);
+  assert.throws(()=>h.pos.saveTerminal({id:t.id,append_products:[{...product,id:'product_03',price:'-1'}]}));
+  assert.throws(()=>h.pos.saveTerminal({id:t.id,append_products:Array.from({length:99},(_,i)=>({...product,id:`imported_${i}`}))}),/100/);
+  assert.equal(h.pos.terminalSettings({id:t.id}).products.length,2);
+  assert.throws(()=>h.pos.saveTerminal({append_products:[product]}));
+  h.owner='bob';assert.throws(()=>h.pos.saveTerminal({id:t.id,append_products:[product]}));
+});
+
+test('history keeps its original rate and remains readable if current rates fail',()=>{
+  const h=fixture(),t=h.create({currency:'USD'}),sale=h.pos.createCheckout(h.sale(t));
+  h.markPaid(sale.payment_hash);h.pos.recordPayment(h.event(sale.payment_hash));
+  h.host.rate=()=>({rate:2000});
+  assert.equal(h.pos.publicHistory({link:t.cashier_link})[0].sale.exchange_rate,1000);
+  assert.equal(h.pos.saleReceipt({checkoutId:sale.id}).sale.exchange_rate,1000);
+  assert.equal(h.pos.historyRate({link:t.cashier_link,currency:'USD'}).rate,2000);
+  assert.equal(h.pos.salesRate({currency:'USD'}).rate,2000);
+  assert.throws(()=>h.pos.historyRate({link:t.display_link,currency:'USD'}));
+  assert.throws(()=>h.pos.salesRate({currency:'unknown'}));
+  h.host.rate=()=>{throw Error('Rates unavailable');};
+  assert.equal(h.pos.sales({}).rows[0].sale.exchange_rate,1000);
+  assert.equal(h.pos.publicHistory({link:t.cashier_link}).length,1);
+  assert.throws(()=>h.pos.historyRate({link:t.cashier_link,currency:'USD'}));
 });
 
 test('owner refresh checks its saved wallet and leaves payouts for grant-controlled contexts',()=>{

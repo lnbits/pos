@@ -1,14 +1,14 @@
 <script setup>
-import {ref,computed,onMounted,onBeforeUnmount} from 'vue';
+import {ref,computed,watch,onMounted,onBeforeUnmount} from 'vue';
 import QRCode from 'qrcode';
 import {createBridge} from './bridge.js';
-import {cartStorage,checkoutSession} from './storage.js';
+import {cartStorage,checkoutSession,appearanceStorage} from './storage.js';
 import {applyCoreTheme} from './theme.js';
 import {calculateSale,decimal,minor,productCategories} from '../src/domain.js';
 import {keypadAmount,keypadShortcut} from './keypad.js';
-import {createReceiptPrompt} from './receipt.js';
+import {createCheckoutCompletion,receiptRate,currentFiatValue} from './receipt.js';
 
-const bridge=createBridge(),local=cartStorage(bridge);
+const bridge=createBridge(),local=cartStorage(bridge),appearance=appearanceStorage(bridge);
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref(''),isPublic=ref(false),link=ref('');
 const terminals=ref([]),meta=ref({wallets:[],currencies:['sat'],providers:[]}),editor=ref(null);
 const expanded=ref([]),catalog=ref(null),itemEditor=ref(null),showImport=ref(false);
@@ -18,12 +18,17 @@ const invoice=ref(null),invoiceQr=ref(''),share=ref(null),shareQr=ref(''),sales=
 const rounding=ref(''),cashierAttempt=ref(null);
 const confirmation=ref(null),receiptOnly=ref(false);
 const printPrompt=ref(null),fullscreen=ref(false),fullscreenAvailable=ref(false);
-const shouldPromptReceipt=createReceiptPrompt();
+const completeCheckout=createCheckoutCompletion();
+const showHold=ref(false),holdNote=ref(''),importMode=ref('append'),historyRates=ref({}),salesRates=ref({});
 const cartDrawer=ref(false),listView=ref(false),mono=ref(false),showNote=ref(false),showTips=ref(false),showMethods=ref(false),showRound=ref(false),pendingMethod=ref(null),lineEditor=ref(null);
 const tileSize=ref(160);
 const keypadValue=computed(()=>keypadAmount(keypad.value,currentCurrency.value));
 let previousCheckout=null,activeCheckoutId='';
 let timer,unsubscribe,session,polling=false,qrSequence=0;
+let appearanceReady=false;
+watch([mono,tileSize],()=>{
+  if(appearanceReady)appearance.save({mono:mono.value,tileSize:tileSize.value}).catch(()=>{notice.value='Could not save appearance on this device.';});
+});
 function ask(message){return new Promise(resolve=>{confirmation.value={message,resolve};});}
 function answer(value){confirmation.value?.resolve(value);confirmation.value=null;}
 
@@ -46,6 +51,7 @@ async function loadAdmin(){[terminals.value,meta.value]=await Promise.all([bridg
 async function edit(t){await run(async()=>{editor.value=t?{...blank(),...await bridge.api(`/terminals/${encodeURIComponent(t.id)}`)}:blank();});}
 async function save(){await run(async()=>{await bridge.api('/terminals','POST',editor.value);editor.value=null;catalog.value=null;expanded.value=[];await loadAdmin();notice.value='PoS saved.';});}
 async function disable(t){if(!await ask(`Disable ${t.name}? Its shared links will stop working.`))return;await run(async()=>{await bridge.api('/terminals/disable','POST',{id:t.id});await loadAdmin();});}
+async function deleteTerminal(t){if(!await ask(`Delete ${t.name}? Its shared links will stop working. Existing payments and receipts remain in All sales.`))return;await run(async()=>{await bridge.api('/terminals/delete','POST',{id:t.id});catalog.value=null;expanded.value=[];share.value=null;await loadAdmin();notice.value='PoS deleted. Its receipts remain in All sales.';});}
 async function rotate(t){if(!await ask('Replace both shared links? The old links will stop working.'))return;await run(async()=>{await bridge.api('/terminals/rotate','POST',{id:t.id});await loadAdmin();share.value=null;notice.value='Links replaced.';});}
 function terminalUrl(token){return `${new URL(location.href).origin}/ext/pos/terminal/${encodeURIComponent(token)}`;}
 async function shareTerminal(t){await run(async()=>{shareQr.value=await QRCode.toDataURL(terminalUrl(t.cashier_link),{width:260,margin:2});share.value={terminal:t,url:terminalUrl(t.cashier_link),display:terminalUrl(t.display_link)};});}
@@ -61,17 +67,26 @@ async function saveItem(){await run(async()=>{const rows=clone(catalog.value.pro
 async function deleteItems(p){if(!await ask(p?`Delete ${p.title}?`:'Delete all items from this PoS?'))return;await run(()=>saveCatalog(p?catalog.value.products.filter(row=>row.id!==p.id):[]));}
 async function importProducts(){await run(async()=>{
     const raw=JSON.parse(importText.value);if(!Array.isArray(raw)||raw.length>100)throw Error('Import a JSON array of up to 100 products.');
-    const rows=raw.map(p=>({id:crypto.randomUUID().replaceAll('-',''),title:p.title,description:p.description||'',price:String(p.price),tax:p.tax??null,categories:productCategories(p),disabled:p.disabled===true,image:p.image||''}));
-    if(!await ask(`Replace this catalog with ${rows.length} imported items?`))return;
-    await saveCatalog(rows);importText.value='';showImport.value=false;
+    const rows=raw.map(p=>{if(!p||typeof p!=='object'||Array.isArray(p))throw Error('Every imported item must be a product object.');return {id:crypto.randomUUID().replaceAll('-',''),title:p.title,description:p.description||'',price:String(p.price),tax:p.tax??null,categories:productCategories(p),disabled:p.disabled===true,image:p.image||''};});
+    if(!await ask(importMode.value==='append'?`Add ${rows.length} imported items to this catalog?`:`Replace this catalog with ${rows.length} imported items?`))return;
+    if(importMode.value==='append'){catalog.value=await bridge.api('/terminals','POST',{id:catalog.value.id,append_products:rows});await loadAdmin();}
+    else await saveCatalog(rows);
+    importText.value='';showImport.value=false;
 });}
 async function readProductFile(e){const file=e.target.files?.[0];if(!file)return;if(file.size>64000){error.value='Use a JSON file smaller than 64 KB.';return;}importText.value=await file.text();}
 async function exportItems(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-items.csv',columns:['ID','Title','Description','Price','Tax %','Categories','Disabled'],rows:catalog.value.products.map(p=>[p.id,p.title,p.description,p.price,p.tax??'',productCategories(p).join(', '),p.disabled])}));}
 async function copy(value){await run(async()=>{try{await navigator.clipboard.writeText(value);notice.value='Copied to clipboard.';}catch{throw Error('Copy is unavailable. Select and copy the text below.');}});}
 async function sharePublic(){await run(async()=>{shareQr.value=await QRCode.toDataURL(terminalUrl(link.value),{width:260,margin:2});share.value={terminal:terminal.value,url:terminalUrl(link.value)};});}
 async function exportTerminals(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-terminals.csv',columns:['Name','Currency','Active','Tax included'],rows:terminals.value.map(t=>[t.name,t.currency,t.active,t.tax_inclusive])}));}
-async function showSales(t){await run(async()=>{salesTerminal.value=t;offset.value=0;await loadSales();});}
-async function loadSales(){sales.value=await bridge.api(`/sales?id=${encodeURIComponent(salesTerminal.value.id)}&offset=${offset.value}`);}
+async function showSales(t={id:'',name:'All sales'}){await run(async()=>{salesTerminal.value=t;offset.value=0;await loadSales();});}
+async function loadSales(){sales.value=await bridge.api(`/sales?id=${encodeURIComponent(salesTerminal.value.id)}&offset=${offset.value}`);salesRates.value={};const page=sales.value;loadRates(page.rows).then(rates=>{if(sales.value===page)salesRates.value=rates;});}
+async function loadRates(rows,publicHistory=false){
+  const currencies=[...new Set(rows.filter(c=>c.status==='paid'&&['lightning','onchain'].includes(c.method)&&c.sale.currency!=='sat').map(c=>c.sale.currency))];
+  const results=await Promise.all(currencies.map(async currency=>{try{const {rate}=await bridge.api(`${publicHistory?`/terminal/${link.value}/history-rate`:'/sales-rate'}?currency=${encodeURIComponent(currency)}`);return [currency,rate];}catch{return [currency,null];}}));
+  return Object.fromEntries(results);
+}
+function valueNow(c,rates){const value=currentFiatValue(c,rates[c.sale.currency]);return value===null?'':money(value,c.sale.currency);}
+async function printOwnerReceipt(c){await run(async()=>{const receipt=await bridge.api(`/sales/${encodeURIComponent(c.id)}`);await print(receipt);});}
 async function pageSales(delta){await run(async()=>{offset.value=Math.max(0,offset.value+delta);await loadSales();});}
 async function reconcile(c){await run(async()=>{const result=await bridge.api('/sales/reconcile','POST',{id:salesTerminal.value.id,checkout_id:c.id});await loadSales();if(result.onchain&&!result.onchain.status_available)error.value='Core has not synced this Bitcoin payment yet. Check again after sync.';});}
 async function exportSales(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-sales.csv',columns:['Date','Method','Status','Currency','Total','Tax','Tip'],rows:sales.value.rows.map(c=>[timestamp(c.created_at),c.method,c.status,c.sale.currency,decimal(c.sale.total_minor,c.sale.currency),decimal(c.sale.tax_minor,c.sale.currency),decimal(c.sale.tip_minor,c.sale.currency)])}));}
@@ -119,7 +134,7 @@ function roundSelected(){error.value='';roundTotal();if(!error.value)chooseMetho
 function pay(method){showMethods.value=false;checkout(method);}
 function setTip(pct){if(!preview.value)return;const base=preview.value.total_minor-preview.value.tip_minor;tip.value=decimal(Math.round(base*pct/100),currentCurrency.value);}
 function roundTotal(){try{if(!preview.value)return;const base=preview.value.total_minor-preview.value.tip_minor,target=minor(rounding.value,currentCurrency.value);if(target<base)throw Error('Round-up total must cover the sale.');tip.value=decimal(target-base,currentCurrency.value);}catch(e){error.value=e.message;}}
-async function clearCart(){try{await session?.clear();items.value=[];keypad.value='';note.value='';tip.value='0';rounding.value='';cashierAttempt.value=null;invoice.value=null;invoiceQr.value='';activeCheckoutId='';printPrompt.value=null;}catch(e){error.value=e.message;}}
+async function clearCart(){try{await session?.clear();items.value=[];keypad.value='';note.value='';tip.value='0';rounding.value='';cashierAttempt.value=null;invoice.value=null;invoiceQr.value='';qrSequence++;activeCheckoutId='';printPrompt.value=null;return true;}catch(e){error.value=e.message;return false;}}
 async function checkout(method){await run(async()=>{
   if(!cashierAttempt.value)cashierAttempt.value={link:link.value,action_id:crypto.randomUUID().replaceAll('-',''),method,items:clone(items.value),tip:tip.value,note:note.value};
   await session.save(clone(cashierAttempt.value));
@@ -129,7 +144,11 @@ async function checkout(method){await run(async()=>{
 });}
 async function setInvoice(c){
   const previous=invoice.value?.payment_request;invoice.value=c;
-  if(shouldPromptReceipt(c,{role:terminal.value?.role,enabled:terminal.value?.enable_receipt_print,checkoutId:activeCheckoutId,history:receiptOnly.value}))printPrompt.value=c;
+  if(await completeCheckout(c,{role:terminal.value?.role,checkoutId:activeCheckoutId,history:receiptOnly.value},clearCart)){
+    notice.value='Payment received. Ready for the next sale.';
+    if(terminal.value.enable_receipt_print)printPrompt.value=c;
+    return;
+  }
   if(c?.payment_request && c.payment_request!==previous){const seq=++qrSequence;const png=await QRCode.toDataURL(c.payment_request,{width:360,margin:2});if(seq===qrSequence)invoiceQr.value=png;}
   if(!c?.payment_request){qrSequence++;invoiceQr.value='';}
 }
@@ -150,21 +169,23 @@ async function closeCheckout(){
   if(invoice.value?.status==='paid'||invoice.value?.status==='failed'){await clearCart();return;}
   if(await ask('This checkout may still be paid. Start a separate sale? You can find this one in Receipts.'))await clearCart();
 }
-async function recent(){await run(async()=>{history.value=await bridge.api(`/terminal/${link.value}/history`);showHistory.value=true;});}
+async function recent(){await run(async()=>{history.value=await bridge.api(`/terminal/${link.value}/history`);historyRates.value={};showHistory.value=true;const rows=history.value;loadRates(rows,true).then(rates=>{if(history.value===rows)historyRates.value=rates;});});}
 async function viewReceipt(c){await run(async()=>{const receipt=c.method==='onchain'?(await bridge.api(`/terminal/${link.value}?checkoutId=${encodeURIComponent(c.id)}`)).latest:await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(c.id)}`);previousCheckout=invoice.value;receiptOnly.value=true;showHistory.value=false;await setInvoice(receipt);});}
-async function hold(){await run(async()=>{
+function hold(){if(!items.value.length){error.value='Add something to the cart first.';return;}holdNote.value='';showHold.value=true;}
+async function saveHeldCart(){await run(async()=>{
   if(!items.value.length)throw Error('Add something to the cart first.');
-  held.value=await local.hold({items:clone(items.value),tip:tip.value,note:note.value},new Date().toLocaleTimeString());await clearCart();notice.value='Cart held on this device.';
+  if(cashierAttempt.value)throw Error('Finish the checkout before holding this cart.');
+  held.value=await local.hold({items:clone(items.value),tip:tip.value,note:note.value},holdNote.value.trim()||new Date().toLocaleTimeString());showHold.value=false;await clearCart();notice.value='Cart held on this device.';
 });}
 async function heldCarts(){await run(async()=>{held.value=await local.list();showHeld.value=true;});}
 async function resume(id){await run(async()=>{if(items.value.length&&!await ask('Replace the current cart?'))return;const c=await local.load(id);items.value=c.items;tip.value=c.tip||'0';note.value=c.note||'';await local.remove(id);showHeld.value=false;});}
 async function removeHeld(id){await run(async()=>{await local.remove(id);held.value=await local.list();});}
-async function print(c,order=false){await run(async()=>{
+async function print(c,order=false){
   const s=c.sale,b=c.business;
   const lines=[timestamp(c.created_at),c.terminal_name,`Payment: ${c.method} · ${c.status}`,b.name,b.address,b.vat_id?`VAT: ${b.vat_id}`:'',s.note].filter(Boolean);
-  if(!order){lines.push(`Subtotal: ${money(s.subtotal_minor,s.currency)}`,`Tax${s.tax_inclusive?' (included)':''}: ${money(s.tax_minor,s.currency)}`,`Tip: ${money(s.tip_minor,s.currency)}`,`Total: ${money(s.total_minor,s.currency)}`);if(c.method==='lightning'||c.method==='onchain'||!b.only_show_sats_on_bitcoin)lines.push(`Bitcoin amount: ${c.amount_sat} sats`);if(c.onchain)lines.push(`Network: ${c.onchain.network}`,`Address: ${c.onchain.address}`);}
+  if(!order){const rate=receiptRate(c);if(rate)lines.push(rate);lines.push(`Subtotal: ${money(s.subtotal_minor,s.currency)}`,`Tax${s.tax_inclusive?' (included)':''}: ${money(s.tax_minor,s.currency)}`,`Tip: ${money(s.tip_minor,s.currency)}`,`Total: ${money(s.total_minor,s.currency)}`);if(c.method==='lightning'||c.method==='onchain'||!b.only_show_sats_on_bitcoin)lines.push(`Bitcoin amount: ${c.amount_sat} sats`);if(c.onchain)lines.push(`Network: ${c.onchain.network}`,`Address: ${c.onchain.address}`);}
   await bridge.request('ui.print_document',{title:order?'Order':'Receipt',lines,columns:order?['Item','Quantity','Note']:['Item','Quantity','Unit price','Note'],rows:s.items.map(l=>order?[l.title,l.quantity,l.note]:[l.title,l.quantity,money(l.price_minor,s.currency),l.note])});
-});}
+}
 onMounted(async()=>{
   document.addEventListener('keydown',handleKeypad);
   document.addEventListener('fullscreenchange',updateFullscreen);
@@ -175,6 +196,7 @@ onMounted(async()=>{
     if(isPublic.value){
       if(!/^[A-Za-z0-9_-]{8,128}$/.test(link.value))throw Error('Invalid terminal link.');
       await loadTerminal();
+      const savedAppearance=await appearance.load();mono.value=savedAppearance.mono;tileSize.value=savedAppearance.tileSize;appearanceReady=true;
       view.value=terminal.value.products?.some(p=>!p.disabled)?'products':'keypad';cartDrawer.value=view.value==='products'&&window.Quasar.Screen.gt.sm;
       session=checkoutSession(bridge,link.value);
       if(terminal.value.role==='cashier'){
@@ -245,7 +267,7 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
 
       <section v-else-if="!isPublic" class="row q-col-gutter-md">
         <div class="col-12 col-md-8 col-lg-7 q-gutter-y-md">
-          <q-card><q-card-section><q-btn unelevated color="primary" label="New PoS" @click="edit()" :disable="busy" /></q-card-section></q-card>
+          <q-card><q-card-section class="row q-gutter-sm"><q-btn unelevated color="primary" label="New PoS" @click="edit()" :disable="busy" /><q-btn flat color="primary" label="All sales" @click="showSales()" :disable="busy" /></q-card-section></q-card>
           <q-card>
             <q-card-section class="row items-center justify-between"><span class="text-h6">PoS</span><q-btn flat color="grey" label="Export to CSV" @click="exportTerminals" :disable="busy||!terminals.length" /></q-card-section>
             <q-card-section class="q-pt-none">
@@ -262,6 +284,7 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
                         <q-item clickable v-close-popup @click="showSales(props.row)"><q-item-section>Sales &amp; receipts</q-item-section></q-item>
                         <q-item v-if="props.row.tip_wallet||props.row.revenue_address" clickable v-close-popup @click="background(props.row)"><q-item-section>Payment permission</q-item-section></q-item>
                         <q-item clickable v-close-popup @click="rotate(props.row)"><q-item-section>Replace links</q-item-section></q-item>
+                        <q-item clickable v-close-popup @click="deleteTerminal(props.row)"><q-item-section class="text-negative">Delete PoS</q-item-section></q-item>
                       </q-list></q-menu></q-btn>
                     </q-td>
                     <q-td key="name" :props="props">{{props.row.name}} <q-badge v-if="!props.row.active" color="grey" label="Disabled" /></q-td>
@@ -424,15 +447,17 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
   </q-dialog>
 
   <q-dialog v-model="showImport" position="top" :persistent="busy"><q-card class="lnbits__dialog-card q-pa-lg">
-    <h2 class="text-h6 q-mt-none">Import Items</h2><p>Import a TPoS JSON item list. This replaces the current items.</p>
+    <h2 class="text-h6 q-mt-none">Import Items</h2><p>Import a TPoS JSON item list. Add to your catalog or replace all items.</p>
     <p class="text-caption">Up to 100 items and 10 categories per item. Only small data images are supported. Remove remote image URLs before importing.</p>
     <label class="block q-mb-md">JSON file <input type="file" accept="application/json,.json" @change="readProductFile"></label>
     <q-input filled v-model="importText" type="textarea" rows="5" label="Items JSON" />
+    <q-option-group v-model="importMode" :options="[{label:'Add to existing items',value:'append'},{label:'Replace all items',value:'replace'}]" color="primary" />
     <p v-if="error" class="text-negative" role="alert">{{error}}</p>
     <q-card-actions class="q-px-none"><q-btn color="primary" label="Import" @click="importProducts" :loading="busy" /><q-space /><q-btn flat color="grey" label="Cancel" v-close-popup :disable="busy" /></q-card-actions>
   </q-card></q-dialog>
 
   <q-dialog v-model="showNote" position="top"><q-card class="lnbits__dialog-card q-pa-lg"><h2 class="text-h6 q-mt-none">Add note</h2><q-input filled v-model="note" maxlength="240" label="Note" :disable="!!cashierAttempt" /><q-card-actions align="right"><q-btn flat color="primary" label="Ok" v-close-popup /></q-card-actions></q-card></q-dialog>
+  <q-dialog v-model="showHold" position="top" :persistent="busy"><q-card class="lnbits__dialog-card q-pa-lg"><h2 class="text-h6 q-mt-none">Hold cart</h2><q-input filled v-model="holdNote" maxlength="36" label="Note (optional)" :disable="busy" @keyup.enter="saveHeldCart" /><p v-if="error" role="alert" class="text-negative">{{error}}</p><q-card-actions align="right"><q-btn flat color="grey" label="Cancel" v-close-popup :disable="busy" /><q-btn color="primary" label="Hold" @click="saveHeldCart" :loading="busy" /></q-card-actions></q-card></q-dialog>
   <q-dialog :model-value="!!lineEditor" position="top" @update:model-value="lineEditor=null"><q-card v-if="lineEditor" class="lnbits__dialog-card q-pa-lg"><h2 class="text-h6 q-mt-none">{{title(lineEditor.line)}}</h2><q-input filled v-model="lineEditor.value" :inputmode="lineEditor.field==='price'?'decimal':'text'" :maxlength="lineEditor.field==='note'?160:16" :label="lineEditor.field==='price'?'Unit price ('+currentCurrency+')':'Item note'" /><p v-if="error" role="alert" class="text-negative">{{error}}</p><q-card-actions><q-btn color="primary" label="Ok" @click="saveLine" /><q-space /><q-btn flat color="grey" label="Cancel" @click="lineEditor=null" /></q-card-actions></q-card></q-dialog>
   <q-dialog v-model="showTips" position="top"><q-card class="lnbits__dialog-card q-pa-lg q-pt-xl">
     <div class="text-h5 text-center q-mb-xl">Would you like to leave a tip?</div>
@@ -484,7 +509,7 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
       </q-card-section>
       <q-card-actions v-if="terminal?.role!=='display'" align="center">
         <q-btn v-if="invoice.status==='pending'" outline color="grey" :label="invoice.onchain?'Copy address':invoice.method==='lightning'?'Copy invoice':'Copy URL'" @click="copy(invoice.onchain?.address||invoice.payment_request)" :disable="busy" />
-        <q-btn flat label="Print order" @click="print(invoice,true)" :disable="busy" /><q-btn v-if="invoice.status==='paid'" flat label="Print receipt" @click="print(invoice)" :disable="busy" />
+        <q-btn flat label="Print order" @click="run(()=>print(invoice,true))" :disable="busy" /><q-btn v-if="invoice.status==='paid'" flat label="Print receipt" @click="run(()=>print(invoice))" :disable="busy" />
         <q-btn v-if="invoice.status==='paid'||invoice.status==='failed'" color="primary" :label="receiptOnly?'Close receipt':'Next sale'" @click="closeCheckout" /><template v-else><q-btn flat label="Check status" @click="poll" :disable="busy" /><q-btn flat color="grey" label="Close" @click="closeCheckout" /></template>
       </q-card-actions>
     </q-card>
@@ -494,8 +519,8 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
     <q-card v-if="printPrompt" class="lnbits__dialog-card">
       <q-card-section><h2 class="text-h6 q-ma-none">Print receipt</h2></q-card-section>
       <q-card-actions align="center">
-        <q-btn color="primary" label="Print receipt" @click="print(printPrompt)" :disable="busy" />
-        <q-btn outline color="primary" label="Print order" @click="print(printPrompt,true)" :disable="busy" />
+        <q-btn color="primary" label="Print receipt" @click="run(()=>print(printPrompt))" :disable="busy" />
+        <q-btn outline color="primary" label="Print order" @click="run(()=>print(printPrompt,true))" :disable="busy" />
         <q-btn flat color="grey" label="Close" @click="printPrompt=null" :disable="busy" />
       </q-card-actions>
     </q-card>
@@ -511,7 +536,7 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
         </q-list>
         <q-list v-else separator>
           <p v-if="!history.length">No sales yet.</p>
-          <q-item v-for="c in history" :key="c.id" clickable @click="viewReceipt(c)" :disable="busy"><q-item-section><q-item-label>{{timestamp(c.created_at)}}</q-item-label><q-item-label caption>{{c.method}} · {{c.status}}</q-item-label></q-item-section><q-item-section side>{{money(c.sale.total_minor,c.sale.currency)}}</q-item-section></q-item>
+          <q-item v-for="c in history" :key="c.id" clickable @click="viewReceipt(c)" :disable="busy"><q-item-section><q-item-label>{{timestamp(c.created_at)}}</q-item-label><q-item-label caption>{{c.method}} · {{c.status}}</q-item-label><q-item-label v-if="receiptRate(c)" caption>{{receiptRate(c)}} at sale</q-item-label></q-item-section><q-item-section side>{{money(c.sale.total_minor,c.sale.currency)}}<q-item-label v-if="valueNow(c,historyRates)" caption>Now: {{valueNow(c,historyRates)}}</q-item-label></q-item-section></q-item>
         </q-list>
       </q-card-section>
     </q-card>
@@ -524,7 +549,7 @@ onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);docume
         <div class="row items-center justify-between q-mb-md"><span>{{sales.total}} checkouts</span><q-btn flat label="Export this page" @click="exportSales" :disable="busy" /></div>
         <q-markup-table flat>
           <thead><tr><th class="text-left">Date</th><th class="text-left">Total</th><th class="text-left">Method</th><th class="text-left">Status / shares</th><th class="text-left">Actions</th></tr></thead>
-          <tbody><tr v-for="c in sales.rows" :key="c.id"><td>{{timestamp(c.created_at)}}</td><td>{{money(c.sale.total_minor,c.sale.currency)}}</td><td>{{c.method}}</td><td>{{c.status}}<div v-for="(p,k) in c.payouts" :key="k" class="text-caption">{{k}}: {{p.state}} · {{p.amount_sat}} sats</div></td><td><q-btn flat label="Check" @click="reconcile(c)" :disable="busy" /><q-btn flat label="Receipt" @click="print(c)" :disable="busy||c.status!=='paid'" /></td></tr></tbody>
+          <tbody><tr v-for="c in sales.rows" :key="c.id"><td>{{timestamp(c.created_at)}}<div v-if="!salesTerminal.id" class="text-caption">{{c.terminal_name}}</div></td><td>{{money(c.sale.total_minor,c.sale.currency)}}<div v-if="receiptRate(c)" class="text-caption">{{receiptRate(c)}} at sale</div><div v-if="valueNow(c,salesRates)" class="text-caption">Now: {{valueNow(c,salesRates)}}</div></td><td>{{c.method}}</td><td>{{c.status}}<div v-for="(p,k) in c.payouts" :key="k" class="text-caption">{{k}}: {{p.state}} · {{p.amount_sat}} sats</div></td><td><q-btn flat label="Check" @click="reconcile(c)" :disable="busy" /><q-btn flat label="Receipt" @click="printOwnerReceipt(c)" :disable="busy||c.status!=='paid'" /></td></tr></tbody>
         </q-markup-table>
         <p class="text-caption q-mt-md">Shares marked “review” or “pending” need checking in the wallet. PoS never resends an uncertain payment automatically.</p><p v-if="error" role="alert" class="text-negative">{{error}}</p>
       </q-card-section>

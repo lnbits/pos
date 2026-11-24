@@ -18,7 +18,8 @@ export function cartStorage(bridge) {
       const id=crypto.randomUUID();let written=0;
       try {
         for(const [i,p] of parts.entries()){await write(`held.${id}.${i}`,p);written++;}
-        const next=[...rows,{id,name:String(name).slice(0,36),chunks:parts.length}];
+        const next=[...rows,{id,name:String(name).trim().slice(0,36),chunks:parts.length}];
+        if(new TextEncoder().encode(JSON.stringify(next)).length>1024)throw Error('Held cart names exceed device storage. Use a shorter note.');
         await write('held-index',JSON.stringify(next));return next;
       } catch(error) {for(let i=0;i<written;i++)await remove(`held.${id}.${i}`).catch(()=>{});throw error;}
     },
@@ -31,6 +32,22 @@ export function cartStorage(bridge) {
       const rows=await index(),row=rows.find(r=>r.id===id);
       await write('held-index',JSON.stringify(rows.filter(r=>r.id!==id)));
       if(row)for(let i=0;i<row.chunks;i++)await remove(`held.${id}.${i}`);
+    }
+  };
+}
+
+export function appearanceStorage(bridge) {
+  const normalize=value=>({mono:value?.mono===true,tileSize:[80,120,160,200,240].includes(value?.tileSize)?value.tileSize:160});
+  let pending=Promise.resolve();
+  return {
+    async load() {
+      try {return normalize(JSON.parse((await bridge.request('storage.local.get',{key:'appearance'})).value||'{}'));}
+      catch {return normalize(null);}
+    },
+    save(value) {
+      const data=JSON.stringify(normalize(value));
+      pending=pending.catch(()=>{}).then(()=>bridge.request('storage.local.set',{key:'appearance',value:data}));
+      return pending;
     }
   };
 }

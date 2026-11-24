@@ -12,6 +12,9 @@ export function fixture() {
         if (old && old.owner!==h.owner) throw Error('wrong owner');
         h.rows.set(k,{owner:h.owner,data:copy(data)});
       },
+      delete(table,id) {
+        if(host.db.get(table,id))h.rows.delete(key(table,id));
+      },
       list(table,filters,limit,offset) {
         const rows=[...h.rows].filter(([k,r])=>k.startsWith(`${table}:`) && r.owner===h.owner && Object.entries(filters).every(([f,v])=>r.data[f]===v)).map(([,r])=>copy(r.data)).sort((a,b)=>(b.created_at||0)-(a.created_at||0));
         return {rows:rows.slice(offset,offset+limit),total:rows.length};
