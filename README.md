@@ -10,7 +10,7 @@ The on-chain host calls are checked against local core commit `a8aee7649`, inclu
 
 The owner screen follows TPoS's terminal table, expandable Items table and settings sections. The cashier uses the same four-column keypad with implicit decimal entry, product grid/list, right-hand cart, options menu and tip flow. PoS keeps its own name and logo and uses core's theme. Only supported payment methods are shown.
 
-PoS 0.3.0 requires core's `reserve_address_public` host API and extended wallet summaries, available at `lnbits/lnbits` commit `a8aee7649db24aaba93892652bfbbef8cb7a28c7` on `feat/wasm-onchain-checkouts`. Older core builds cannot load this component, even with on-chain payments disabled. TPoS behavior was reviewed at `80e0290fc3939d936674ded918407c5feb056727`. A version number alone does not guarantee that a core build has these WASM APIs.
+PoS 0.3.1 requires core's `reserve_address_public` host API and extended wallet summaries, available at `lnbits/lnbits` commit `a8aee7649db24aaba93892652bfbbef8cb7a28c7` on `feat/wasm-onchain-checkouts`. Older core builds cannot load this component, even with on-chain payments disabled. TPoS behavior was reviewed at `80e0290fc3939d936674ded918407c5feb056727`. A version number alone does not guarantee that a core build has these WASM APIs.
 
 ## Included features
 
@@ -97,7 +97,7 @@ LNBITS_CORE_PATH=/path/to/lnbits make test-host PYTHON=/path/to/lnbits/.venv/bin
 make package
 ```
 
-`test-host` executes the compiled component against core's actual host imports. It checks real on-chain address allocation, bound tokens, retries, partial/confirmed payments, stale scans and owner isolation using temporary wallets and synthetic scan data. It also checks core's query-parameter conversion for payment status. `package` creates `dist/pos-0.3.0.zip` with only the runtime files. Core must install this release ZIP, not a GitHub source ZIP: source includes a Python test helper, which is deliberately excluded from the WASM release. Reactivate the extension (or restart the development server) after rebuilding so core warms the new component before serving requests.
+`test-host` executes the compiled component against core's actual host imports. It checks real on-chain address allocation, bound tokens, retries, partial/confirmed payments, stale scans and owner isolation using temporary wallets and synthetic scan data. It also checks core's query-parameter conversion for payment status. `package` creates `dist/pos-0.3.1.zip` with only the runtime files. Core must install this release ZIP, not a GitHub source ZIP: source includes a Python test helper, which is deliberately excluded from the WASM release. Reactivate the extension (or restart the development server) after rebuilding so core warms the new component before serving requests.
 
 `test-ui` executes core's real Vue and Quasar scripts in entrypoint order with small browser stubs. It catches startup failures such as loading Quasar before `document.body` exists, and checks dark/light mode with origin storage unavailable. It does not replace visual browser checks.
 

@@ -3,7 +3,7 @@
   "name": "PoS",
   "tile": "/pos/static/assets/icon.png",
   "short_description": "Your Bitcoin counter. Products, tips, Lightning and on-chain checkout, powered by LNbits.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "min_lnbits_version": "1.7.1",
   "extension_type": "wasm",
   "wasm": {
