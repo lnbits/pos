@@ -55,6 +55,12 @@ export function proportion(amount, numerator, denominator, nearest = false) {
   return Number((BigInt(amount) * BigInt(numerator) + (nearest ? divisor / 2n : 0n)) / divisor);
 }
 
+export function productCategories(product) {
+  const values=product.categories ?? (product.category == null || product.category === '' ? [] : [product.category]);
+  if (!Array.isArray(values) || values.length > 10) fail('Use up to 10 categories per product.');
+  return [...new Set(values.map(value=>text(value,'category',40,true)))];
+}
+
 export function normalizeTerminal(input, currencies, wallets) {
   object(input);
   const currency = input.currency === 'sat' ? 'sat' : text(input.currency, 'currency', 3, true).toUpperCase();
@@ -89,7 +95,7 @@ export function normalizeTerminal(input, currencies, wallets) {
     if (!price) fail('Product price must be positive.');
     const image = text(p.image, 'image', 8192);
     if (image && !/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(image)) fail('Use a small PNG, JPEG or WebP data image.');
-    return {id, title:text(p.title,'product title',80,true), description:text(p.description,'description',240), category:text(p.category,'category',40), price:decimal(price,currency), tax:p.tax == null || p.tax === '' ? null : percent(p.tax)/100, disabled:p.disabled === true, image};
+    return {id, title:text(p.title,'product title',80,true), description:text(p.description,'description',240), categories:productCategories(p), price:decimal(price,currency), tax:p.tax == null || p.tax === '' ? null : percent(p.tax)/100, disabled:p.disabled === true, image};
   });
   const result = {
     name:text(input.name,'terminal name',80,true), currency, wallet, tip_wallet:tipWallet,
@@ -100,6 +106,7 @@ export function normalizeTerminal(input, currencies, wallets) {
     revenue_address:revenueAddress, revenue_percent:revenueAddress ? percent(input.revenue_percent,'revenue percentage')/100 : 0,
     business_name:text(input.business_name,'business name',120), business_address:text(input.business_address,'business address',300),
     business_vat_id:text(input.business_vat_id,'VAT ID',80), only_show_sats_on_bitcoin:input.only_show_sats_on_bitcoin !== false,
+    enable_receipt_print:input.enable_receipt_print === true,
     remote_enabled:input.remote_enabled === true, products:normalized
   };
   if (new TextEncoder().encode(JSON.stringify(result)).length > 48000) fail('Catalog is too large. Reduce images or products.');
@@ -134,7 +141,7 @@ export function calculateSale(terminal, input) {
 
 export function publicTerminal(t) {
   const {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin} = t;
-  return {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin,fiat_enabled:!!t.provider,onchain_enabled:t.onchain_enabled===true,onchain_network:t.onchain_enabled ? t.onchain_network : ''};
+  return {name,currency,tax_inclusive,tax_default,allow_price_adjustment,tips_enabled,tip_options,products,business_name,business_address,business_vat_id,only_show_sats_on_bitcoin,enable_receipt_print:t.enable_receipt_print===true,fiat_enabled:!!t.provider,onchain_enabled:t.onchain_enabled===true,onchain_network:t.onchain_enabled ? t.onchain_network : ''};
 }
 
 export function fail(message) { throw new InputError(message); }
