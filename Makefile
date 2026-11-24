@@ -6,6 +6,8 @@ check:
 	node --check src/pos.js
 	node --check src/index.js
 	node --check ui/bridge.js
+	node --check ui/keypad.js
+	node --check ui/receipt.js
 	node --check scripts/build.mjs
 	node --check scripts/package.mjs
 	node --test test/*.test.mjs

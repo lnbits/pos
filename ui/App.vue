@@ -4,8 +4,9 @@ import QRCode from 'qrcode';
 import {createBridge} from './bridge.js';
 import {cartStorage,checkoutSession} from './storage.js';
 import {applyCoreTheme} from './theme.js';
-import {calculateSale,decimal,minor} from '../src/domain.js';
-import {keypadAmount} from './keypad.js';
+import {calculateSale,decimal,minor,productCategories} from '../src/domain.js';
+import {keypadAmount,keypadShortcut} from './keypad.js';
+import {createReceiptPrompt} from './receipt.js';
 
 const bridge=createBridge(),local=cartStorage(bridge);
 const loading=ref(true),busy=ref(false),error=ref(''),notice=ref(''),isPublic=ref(false),link=ref('');
@@ -16,16 +17,19 @@ const terminal=ref(null),items=ref([]),note=ref(''),tip=ref('0'),search=ref(''),
 const invoice=ref(null),invoiceQr=ref(''),share=ref(null),shareQr=ref(''),sales=ref(null),offset=ref(0),salesTerminal=ref(null),importText=ref('');
 const rounding=ref(''),cashierAttempt=ref(null);
 const confirmation=ref(null),receiptOnly=ref(false);
+const printPrompt=ref(null),fullscreen=ref(false),fullscreenAvailable=ref(false);
+const shouldPromptReceipt=createReceiptPrompt();
 const cartDrawer=ref(false),listView=ref(false),mono=ref(false),showNote=ref(false),showTips=ref(false),showMethods=ref(false),showRound=ref(false),pendingMethod=ref(null),lineEditor=ref(null);
 const tileSize=ref(160);
 const keypadValue=computed(()=>keypadAmount(keypad.value,currentCurrency.value));
-let previousCheckout=null;
+let previousCheckout=null,activeCheckoutId='';
 let timer,unsubscribe,session,polling=false,qrSequence=0;
 function ask(message){return new Promise(resolve=>{confirmation.value={message,resolve};});}
 function answer(value){confirmation.value?.resolve(value);confirmation.value=null;}
 
-const categories=computed(()=>[...new Set((terminal.value?.products||[]).filter(p=>!p.disabled&&p.category).map(p=>p.category))]);
-const products=computed(()=>(terminal.value?.products||[]).filter(p=>!p.disabled&&(!category.value||p.category===category.value)&&(`${p.title} ${p.description}`).toLowerCase().includes(search.value.toLowerCase())));
+const categories=computed(()=>[...new Set((terminal.value?.products||[]).filter(p=>!p.disabled).flatMap(productCategories))]);
+const catalogCategories=computed(()=>[...new Set((catalog.value?.products||[]).flatMap(productCategories))]);
+const products=computed(()=>(terminal.value?.products||[]).filter(p=>!p.disabled&&(!category.value||productCategories(p).includes(category.value))&&(`${p.title} ${p.description}`).toLowerCase().includes(search.value.toLowerCase())));
 const preview=computed(()=>{
   if(!terminal.value || !items.value.length)return null;
   try{return calculateSale(terminal.value,{items:items.value,tip:tip.value,note:note.value});}catch{return null;}
@@ -36,7 +40,7 @@ const onchainWallets=computed(()=>meta.value.wallets.filter(w=>w.wallet_type==='
 function money(value,currency=currentCurrency.value){return `${decimal(value,currency)} ${currency==='sat'?'sats':currency}`;}
 function timestamp(value){return new Date(value*1000).toLocaleString();}
 function clone(value){return JSON.parse(JSON.stringify(value));}
-function blank(){return {name:'',currency:'sat',wallet:'',tip_wallet:'',fiat_wallet:'',provider:'',onchain_enabled:false,onchain_wallet_id:'',onchain_zero_conf:false,tax_inclusive:true,tax_default:0,allow_price_adjustment:true,tips_enabled:false,tip_options:[10,15,20],revenue_address:'',revenue_percent:0,business_name:'',business_address:'',business_vat_id:'',only_show_sats_on_bitcoin:true,remote_enabled:false,products:[]};}
+function blank(){return {name:'',currency:'sat',wallet:'',tip_wallet:'',fiat_wallet:'',provider:'',onchain_enabled:false,onchain_wallet_id:'',onchain_zero_conf:false,tax_inclusive:true,tax_default:0,allow_price_adjustment:true,tips_enabled:false,tip_options:[10,15,20],revenue_address:'',revenue_percent:0,business_name:'',business_address:'',business_vat_id:'',only_show_sats_on_bitcoin:true,enable_receipt_print:false,remote_enabled:false,products:[]};}
 async function run(fn){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{return await fn();}catch(e){error.value=e.message||'Something went wrong.';}finally{busy.value=false;}}
 async function loadAdmin(){[terminals.value,meta.value]=await Promise.all([bridge.api('/terminals'),bridge.api('/metadata')]);}
 async function edit(t){await run(async()=>{editor.value=t?{...blank(),...await bridge.api(`/terminals/${encodeURIComponent(t.id)}`)}:blank();});}
@@ -48,7 +52,7 @@ async function shareTerminal(t){await run(async()=>{shareQr.value=await QRCode.t
 async function open(url){await run(()=>bridge.request('navigation.open_new_tab',{url}));}
 async function background(t){await run(()=>bridge.request('permissions.request_background_payment',{forcePrompt:true,grant:{wallet_id:t.wallet}}));}
 async function expand(t){await run(async()=>{if(expanded.value.includes(t.id)){expanded.value=[];catalog.value=null;return;}catalog.value=await bridge.api(`/terminals/${encodeURIComponent(t.id)}`);expanded.value=[t.id];});}
-function editItem(p){error.value='';itemEditor.value=p?clone(p):{id:crypto.randomUUID().replaceAll('-',''),title:'',description:'',category:'',price:'',tax:null,disabled:false,image:''};}
+function editItem(p){error.value='';itemEditor.value=p?{...clone(p),categories:productCategories(p)}:{id:crypto.randomUUID().replaceAll('-',''),title:'',description:'',categories:[],price:'',tax:null,disabled:false,image:''};}
 async function saveCatalog(products){
   const latest=await bridge.api(`/terminals/${encodeURIComponent(catalog.value.id)}`);
   catalog.value=await bridge.api('/terminals','POST',{...latest,products});await loadAdmin();
@@ -57,12 +61,12 @@ async function saveItem(){await run(async()=>{const rows=clone(catalog.value.pro
 async function deleteItems(p){if(!await ask(p?`Delete ${p.title}?`:'Delete all items from this PoS?'))return;await run(()=>saveCatalog(p?catalog.value.products.filter(row=>row.id!==p.id):[]));}
 async function importProducts(){await run(async()=>{
     const raw=JSON.parse(importText.value);if(!Array.isArray(raw)||raw.length>100)throw Error('Import a JSON array of up to 100 products.');
-    const rows=raw.map(p=>({id:crypto.randomUUID().replaceAll('-',''),title:p.title,description:p.description||'',price:String(p.price),tax:p.tax??null,category:p.category||(p.categories||[])[0]||'',disabled:p.disabled===true,image:p.image||''}));
+    const rows=raw.map(p=>({id:crypto.randomUUID().replaceAll('-',''),title:p.title,description:p.description||'',price:String(p.price),tax:p.tax??null,categories:productCategories(p),disabled:p.disabled===true,image:p.image||''}));
     if(!await ask(`Replace this catalog with ${rows.length} imported items?`))return;
     await saveCatalog(rows);importText.value='';showImport.value=false;
 });}
 async function readProductFile(e){const file=e.target.files?.[0];if(!file)return;if(file.size>64000){error.value='Use a JSON file smaller than 64 KB.';return;}importText.value=await file.text();}
-async function exportItems(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-items.csv',columns:['ID','Title','Description','Price','Tax %','Category','Disabled'],rows:catalog.value.products.map(p=>[p.id,p.title,p.description,p.price,p.tax??'',p.category,p.disabled])}));}
+async function exportItems(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-items.csv',columns:['ID','Title','Description','Price','Tax %','Categories','Disabled'],rows:catalog.value.products.map(p=>[p.id,p.title,p.description,p.price,p.tax??'',productCategories(p).join(', '),p.disabled])}));}
 async function copy(value){await run(async()=>{try{await navigator.clipboard.writeText(value);notice.value='Copied to clipboard.';}catch{throw Error('Copy is unavailable. Select and copy the text below.');}});}
 async function sharePublic(){await run(async()=>{shareQr.value=await QRCode.toDataURL(terminalUrl(link.value),{width:260,margin:2});share.value={terminal:terminal.value,url:terminalUrl(link.value)};});}
 async function exportTerminals(){await run(()=>bridge.request('ui.download_csv',{filename:'pos-terminals.csv',columns:['Name','Currency','Active','Tax included'],rows:terminals.value.map(t=>[t.name,t.currency,t.active,t.tax_inclusive])}));}
@@ -86,6 +90,18 @@ function price(line){return line.price??terminal.value.products.find(p=>p.id===l
 function quantity(p){return items.value.filter(l=>l.product_id===p.id).reduce((sum,l)=>sum+l.quantity,0);}
 function subtract(p){if(cashierAttempt.value)return;const i=items.value.findLastIndex(l=>l.product_id===p.id);if(i<0)return;if(items.value[i].quantity>1)items.value[i].quantity--;else items.value.splice(i,1);}
 function press(key){if(cashierAttempt.value)return;if(key==='⌫')keypad.value=keypad.value.slice(0,-1);else if(key==='C'){keypad.value='';items.value=items.value.filter(l=>l.product_id);tip.value='0';}else if(/^\d$/.test(key)){try{keypadAmount(keypad.value+key,currentCurrency.value);keypad.value+=key;}catch{error.value='Amount is too large.';}}}
+function handleKeypad(event){
+  if(loading.value||busy.value||!isPublic.value||terminal.value?.role!=='cashier'||view.value!=='keypad'||cashierAttempt.value||invoice.value||showTips.value||showMethods.value||showNote.value||lineEditor.value||share.value||showHistory.value||showHeld.value||confirmation.value||printPrompt.value||document.querySelector('.q-dialog,.q-menu'))return;
+  if(event.key==='Escape'&&document.fullscreenElement)return;
+  const key=keypadShortcut(event);if(!key)return;
+  event.preventDefault();
+  if(key==='Enter')startPayment();else if(key==='+')addCustom();else press(key);
+}
+function updateFullscreen(){fullscreen.value=!!document.fullscreenElement;}
+async function toggleFullscreen(){await run(async()=>{
+  try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}
+  catch{throw Error('Fullscreen is unavailable in this browser.');}
+});}
 function addCustom(){try{if(cashierAttempt.value)return false;const amount=keypadValue.value;if(!minor(amount,currentCurrency.value))throw Error('Enter an amount.');items.value.push({title:'Custom amount',price:amount,quantity:1,note:''});keypad.value='';error.value='';return true;}catch(e){error.value=e.message;return false;}}
 function switchView(){view.value=view.value==='products'?'keypad':'products';cartDrawer.value=view.value==='products'&&window.Quasar.Screen.gt.sm;}
 function editLine(line,field){if(cashierAttempt.value)return;lineEditor.value={line,field,value:field==='price'?price(line):line.note};}
@@ -103,14 +119,17 @@ function roundSelected(){error.value='';roundTotal();if(!error.value)chooseMetho
 function pay(method){showMethods.value=false;checkout(method);}
 function setTip(pct){if(!preview.value)return;const base=preview.value.total_minor-preview.value.tip_minor;tip.value=decimal(Math.round(base*pct/100),currentCurrency.value);}
 function roundTotal(){try{if(!preview.value)return;const base=preview.value.total_minor-preview.value.tip_minor,target=minor(rounding.value,currentCurrency.value);if(target<base)throw Error('Round-up total must cover the sale.');tip.value=decimal(target-base,currentCurrency.value);}catch(e){error.value=e.message;}}
-async function clearCart(){try{await session?.clear();items.value=[];keypad.value='';note.value='';tip.value='0';rounding.value='';cashierAttempt.value=null;invoice.value=null;invoiceQr.value='';}catch(e){error.value=e.message;}}
+async function clearCart(){try{await session?.clear();items.value=[];keypad.value='';note.value='';tip.value='0';rounding.value='';cashierAttempt.value=null;invoice.value=null;invoiceQr.value='';activeCheckoutId='';printPrompt.value=null;}catch(e){error.value=e.message;}}
 async function checkout(method){await run(async()=>{
   if(!cashierAttempt.value)cashierAttempt.value={link:link.value,action_id:crypto.randomUUID().replaceAll('-',''),method,items:clone(items.value),tip:tip.value,note:note.value};
   await session.save(clone(cashierAttempt.value));
-  await setInvoice(await bridge.api(`/terminal/${link.value}/checkout`,'POST',cashierAttempt.value));
+  const checkout=await bridge.api(`/terminal/${link.value}/checkout`,'POST',cashierAttempt.value);
+  activeCheckoutId=checkout.id;
+  await setInvoice(checkout);
 });}
 async function setInvoice(c){
   const previous=invoice.value?.payment_request;invoice.value=c;
+  if(shouldPromptReceipt(c,{role:terminal.value?.role,enabled:terminal.value?.enable_receipt_print,checkoutId:activeCheckoutId,history:receiptOnly.value}))printPrompt.value=c;
   if(c?.payment_request && c.payment_request!==previous){const seq=++qrSequence;const png=await QRCode.toDataURL(c.payment_request,{width:360,margin:2});if(seq===qrSequence)invoiceQr.value=png;}
   if(!c?.payment_request){qrSequence++;invoiceQr.value='';}
 }
@@ -118,7 +137,11 @@ async function poll(){
   if(polling||busy.value||!isPublic.value||!terminal.value)return;polling=true;
   try {
     if(terminal.value.role==='display')await loadTerminal();
-    if(invoice.value?.id&&(terminal.value.role!=='display'||invoice.value.method==='onchain'))await setInvoice(await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(invoice.value.id)}`));
+    if(invoice.value?.id&&(terminal.value.role!=='display'||invoice.value.method==='onchain')){
+      const id=invoice.value.id,receipt=receiptOnly.value;
+      const result=await bridge.api(`/terminal/${link.value}/status?checkoutId=${encodeURIComponent(id)}`);
+      if(invoice.value?.id===id&&receiptOnly.value===receipt)await setInvoice(result);
+    }
     if(invoice.value?.onchain?.status_available)error.value='';
   }catch(e){if(invoice.value?.onchain){invoice.value.onchain.status_available=false;error.value='Core could not check this Bitcoin payment yet. Keep this checkout and retry after sync.';}else error.value=e.message;}finally{polling=false;}
 }
@@ -143,6 +166,9 @@ async function print(c,order=false){await run(async()=>{
   await bridge.request('ui.print_document',{title:order?'Order':'Receipt',lines,columns:order?['Item','Quantity','Note']:['Item','Quantity','Unit price','Note'],rows:s.items.map(l=>order?[l.title,l.quantity,l.note]:[l.title,l.quantity,money(l.price_minor,s.currency),l.note])});
 });}
 onMounted(async()=>{
+  document.addEventListener('keydown',handleKeypad);
+  document.addEventListener('fullscreenchange',updateFullscreen);
+  fullscreenAvailable.value=document.fullscreenEnabled===true;updateFullscreen();
   try {
     const context=await bridge.request('context');isPublic.value=context.public;applyCoreTheme(context.theme);link.value=context.routeParams?.link||'';
     unsubscribe=bridge.onEvent(e=>{if(e.event==='ui.theme')applyCoreTheme(e.data);if(e.event==='websocket.message')poll();});
@@ -160,7 +186,7 @@ onMounted(async()=>{
     }else await loadAdmin();
   }catch(e){error.value=e.message;}finally{loading.value=false;}
 });
-onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch(()=>{});});
+onBeforeUnmount(()=>{document.removeEventListener('keydown',handleKeypad);document.removeEventListener('fullscreenchange',updateFullscreen);clearInterval(timer);unsubscribe?.();bridge.close().catch(()=>{});});
 </script>
 
 <template>
@@ -282,6 +308,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
           <q-space />
           <q-fab color="primary" icon="keyboard_arrow_down" active-icon="close" direction="down" padding="sm" aria-label="PoS options">
             <q-fab-action color="primary" icon="receipt" label="Receipts" @click="recent" :disable="busy" />
+            <q-fab-action v-if="fullscreenAvailable" color="primary" :icon="fullscreen?'fullscreen_exit':'fullscreen'" :label="fullscreen?'Exit fullscreen':'Fullscreen'" @click="toggleFullscreen" :disable="busy" />
             <q-fab-action color="primary" :icon="view==='products'?'dialpad':'point_of_sale'" :label="view==='products'?'PoS View':'Cart View'" @click="switchView" />
             <q-fab-action color="primary" icon="pause_circle_outline" label="Carts on hold" @click="heldCarts" :disable="busy||!!cashierAttempt" />
             <q-fab-action color="primary" icon="qr_code" label="Share URL" @click="sharePublic" :disable="busy" />
@@ -357,6 +384,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
             <q-checkbox v-model="editor.remote_enabled" label="Enable remote (to trigger payments on external device)" />
           </div></q-expansion-item>
           <q-expansion-item icon="receipt_long" label="Receipts" caption="Business details for printing"><div class="q-pa-md q-gutter-y-md">
+            <q-checkbox v-model="editor.enable_receipt_print" label="Prompt to print after payment" />
             <q-input filled dense v-model="editor.business_name" maxlength="120" label="Business name" placeholder="My Shop" />
             <q-input filled dense v-model="editor.business_address" maxlength="300" rows="3" type="textarea" label="Business address" />
             <q-input filled dense v-model="editor.business_vat_id" maxlength="80" label="VAT ID" />
@@ -386,7 +414,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
         <q-input filled dense v-model="itemEditor.description" maxlength="240" label="Description" />
         <q-input filled dense v-model="itemEditor.image" maxlength="8192" label="Image data" hint="Small PNG, JPEG or WebP data image. Remote URLs are not supported." />
         <q-input filled dense v-model="itemEditor.price" inputmode="decimal" :label="'Price ('+catalog.currency+') *'" />
-        <q-input filled dense v-model="itemEditor.category" maxlength="40" label="Category" />
+        <q-select filled dense v-model="itemEditor.categories" :options="catalogCategories" multiple use-chips use-input new-value-mode="add-unique" :max-values="10" maxlength="40" label="Categories (hit enter to add values)" />
         <q-input filled dense v-model="itemEditor.tax" type="number" min="0" max="100" step="0.01" label="Tax %" :hint="'Leave empty for default. Tax '+(catalog.tax_inclusive?'included in':'added to')+' price.'" />
         <q-checkbox v-model="itemEditor.disabled" label="Disable" />
         <p v-if="error" class="text-negative" role="alert">{{error}}</p>
@@ -397,7 +425,7 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
 
   <q-dialog v-model="showImport" position="top" :persistent="busy"><q-card class="lnbits__dialog-card q-pa-lg">
     <h2 class="text-h6 q-mt-none">Import Items</h2><p>Import a TPoS JSON item list. This replaces the current items.</p>
-    <p class="text-caption">Up to 100 items. Only one category per item and small data images are supported. Remove remote image URLs before importing.</p>
+    <p class="text-caption">Up to 100 items and 10 categories per item. Only small data images are supported. Remove remote image URLs before importing.</p>
     <label class="block q-mb-md">JSON file <input type="file" accept="application/json,.json" @change="readProductFile"></label>
     <q-input filled v-model="importText" type="textarea" rows="5" label="Items JSON" />
     <p v-if="error" class="text-negative" role="alert">{{error}}</p>
@@ -458,6 +486,17 @@ onBeforeUnmount(()=>{clearInterval(timer);unsubscribe?.();bridge.close().catch((
         <q-btn v-if="invoice.status==='pending'" outline color="grey" :label="invoice.onchain?'Copy address':invoice.method==='lightning'?'Copy invoice':'Copy URL'" @click="copy(invoice.onchain?.address||invoice.payment_request)" :disable="busy" />
         <q-btn flat label="Print order" @click="print(invoice,true)" :disable="busy" /><q-btn v-if="invoice.status==='paid'" flat label="Print receipt" @click="print(invoice)" :disable="busy" />
         <q-btn v-if="invoice.status==='paid'||invoice.status==='failed'" color="primary" :label="receiptOnly?'Close receipt':'Next sale'" @click="closeCheckout" /><template v-else><q-btn flat label="Check status" @click="poll" :disable="busy" /><q-btn flat color="grey" label="Close" @click="closeCheckout" /></template>
+      </q-card-actions>
+    </q-card>
+  </q-dialog>
+
+  <q-dialog :model-value="!!printPrompt" @update:model-value="printPrompt=null">
+    <q-card v-if="printPrompt" class="lnbits__dialog-card">
+      <q-card-section><h2 class="text-h6 q-ma-none">Print receipt</h2></q-card-section>
+      <q-card-actions align="center">
+        <q-btn color="primary" label="Print receipt" @click="print(printPrompt)" :disable="busy" />
+        <q-btn outline color="primary" label="Print order" @click="print(printPrompt,true)" :disable="busy" />
+        <q-btn flat color="grey" label="Close" @click="printPrompt=null" :disable="busy" />
       </q-card-actions>
     </q-card>
   </q-dialog>
