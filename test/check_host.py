@@ -127,6 +127,15 @@ async def check(contracts_only):
         assert (await call("record-payment", event, public))["recorded"]
         await call("rotate-links", {"id": terminal["id"]})
         await call("get-terminal", {"link": terminal["cashier_link"]}, public, ok=False)
+        await call("delete-terminal", {"id": terminal["id"]}, bob, ok=False)
+        await call("delete-terminal", {"id": terminal["id"]})
+        assert await call("list-terminals", {}) == []
+        assert (await call("sales", {}))["total"] == 1
+        assert (await call("sales", {}, bob))["total"] == 0
+        assert (await call("sale-receipt", {"checkoutId": checkout["id"]}))["status"] == "paid"
+        await call("sale-receipt", {"checkoutId": checkout["id"]}, bob, ok=False)
+        assert (await call("reconcile", {"checkout_id": checkout["id"]}))["status"] == "paid"
+        assert (await call("sales-rate", {"currency": "sat"}))["rate"] == 1
         print("PASS: compiled WASM, real host imports, two-owner isolation, checkout retries and paid event")
         await _check_onchain(call, alice, bob, public, wallets)
 

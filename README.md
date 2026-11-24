@@ -14,20 +14,26 @@ PoS 0.3.0 requires core's `reserve_address_public` host API and extended wallet 
 
 ## Included features
 
-- Owner-managed terminals, separate staff and customer-display links, link replacement and disabling.
+- Owner-managed terminals, separate staff and customer-display links, link replacement, disabling and deletion. All sales keeps receipts from deleted terminals.
 - Product catalog, multiple categories per item, search, product availability, optional price adjustment, product JSON import and small embedded images. Existing single-category items remain supported.
-- Product carts and a numeric keypad with keyboard shortcuts; quantities, item notes and sale notes; held carts on the device.
+- Product carts and a numeric keypad with keyboard shortcuts; quantities, item notes and sale notes; held carts with optional names on the device. Color mode and tile size are remembered for that terminal on the device.
 - Satoshi or fiat prices, default/product taxes, inclusive/exclusive taxes, tips, custom tips and rounding up.
 - Lightning invoices and configured core hosted fiat checkout; QR codes and payment status.
 - Core on-chain wallets, fresh checkout addresses, Bitcoin QR codes, received amounts and confirmation checks.
 - Receipts and order slips through core's print dialog; optional print prompts after paid cashier checkouts; business name, address and tax ID.
-- Recent terminal sales, paged owner sales, CSV exports of the visible page, and owner payment refresh.
+- Recent terminal sales, paged owner sales, CSV exports of the visible page, and owner payment refresh. Receipts retain the sale-time exchange rate; paid Bitcoin sales show their current fiat value in history when rates are available.
 - Separate Lightning tip wallets and Lightning-address revenue shares, subject to core background-payment grants.
 - A separate customer display with websocket refresh hints and polling; mobile layout, fullscreen cashier mode where the browser supports it, and live core theme updates.
 
 Excluded from this port: Watchonly, cash recording, NFC/card-reader hardware, ATM/password flows, Inventory/Orders/Tabs integrations, remote image downloads and PWA installation. These need capabilities beyond the supported flow used here. Hosted fiat and on-chain tips stay in their respective receiving wallets.
 
 In keypad view, use digits, Backspace, `+`, Enter, and `C`/Escape for the matching keypad actions. Shortcuts are inactive in fields, dialogs and active checkouts; Enter on a focused button keeps that button's action. Fullscreen is in the PoS options menu. Enable **Prompt to print after payment** under the terminal's Receipts settings to offer receipt/order printing after payment; repeated status polls, receipt history and customer displays do not open extra prompts. Core still asks before printing.
+
+Product JSON import adds to the existing catalog by default; **Replace all items** remains available with confirmation. Appending uses the latest saved catalog under the owner's lock and applies the same product and size limits.
+
+After core confirms the active cashier payment, PoS clears the saved checkout and cart for the next sale. The optional print prompt retains the completed receipt. Failed device-storage cleanup keeps the checkout visible for retry; pending payments, history and customer displays never reset a cashier cart.
+
+**Delete PoS** stops all shared links and removes the terminal and catalog. Existing payments remain payable, and their receipts stay available to the owner through **All sales**, including printing and status checks. Deletion does not cancel issued invoices or erase their saved payout rules. No other user can read or manage these receipts.
 
 ## On-chain setup
 
@@ -99,7 +105,7 @@ GitHub Actions runs `make check` on pull requests and pushes to `main`, then bui
 
 Pushing a stable `vX.Y.Z` tag runs the same checks and publishes that tested ZIP and checksum as GitHub release assets. The tag, extension manifest, npm package and lockfile versions must agree. Pull requests have read-only repository permissions; only the tagged release job can publish. No extra secrets are needed, and the workflow can also be run manually.
 
-Verified: `make check` (60 tests), `make package`, `make test-ui` and `make test-host`; real core on-chain allocation, token checks, confirmation rules and allocation failures are exercised with temporary wallets and synthetic scan data. HTTP checks cover the local owner page, metadata and terminal list, with served UI assets matching the build. Earlier HTTP checks also covered anonymous Lightning checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
+Verified: `make check` (70 tests), `make package`, `make test-ui` and `make test-host`; real core on-chain allocation, token checks, confirmation rules and allocation failures are exercised with temporary wallets and synthetic scan data. HTTP checks cover the local owner page, metadata and terminal list, with served UI assets matching the build. Earlier HTTP checks also covered anonymous Lightning checkout, retry reuse, customer-display data and paid status. No real-money payments were used. The production dependency audit is clean; the full audit reports a moderate minimatch issue in Jco's development-only dependency chain.
 
 Before production use, finish a manual browser check through the real core wrapper, including desktop/mobile checkout, display updates and print/CSV/payment-permission dialogs. Live Bitcoin transactions, hosted fiat and external revenue payouts have not been exercised with live providers.
 

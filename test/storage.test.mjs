@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cartStorage,checkoutSession} from '../ui/storage.js';
+import {cartStorage,checkoutSession,appearanceStorage} from '../ui/storage.js';
 
 function storage(){
   const data=new Map();let failKey='';
@@ -41,4 +41,36 @@ test('an incomplete checkout save is never resumed',async()=>{
   const bridge=storage(),session=checkoutSession(bridge,'cash_link1');bridge.fail('checkout.cash_link1');
   await assert.rejects(session.save({link:'cash_link1',items:[]}));
   assert.equal(await session.load(),null);
+});
+
+test('held cart notes survive reload and oversized indexes never lose saved carts',async()=>{
+  const bridge=storage(),local=cartStorage(bridge);
+  const [row]=await local.hold({items:[{title:'Coffee'}]},'  Table 3 — Ana  ');
+  assert.equal((await cartStorage(bridge).list())[0].name,'Table 3 — Ana');
+  let failed=false;
+  for(let i=0;i<6;i++){
+    try{await local.hold({items:[{title:'Tea'}]},'茶'.repeat(36));}
+    catch{failed=true;break;}
+  }
+  assert.ok(failed);
+  assert.deepEqual(await local.load(row.id),{items:[{title:'Coffee'}]});
+  assert.ok(Buffer.byteLength(bridge.data.get('held-index'))<=1024);
+});
+
+test('appearance survives reload and invalid or unavailable storage uses defaults',async()=>{
+  const bridge=storage();await appearanceStorage(bridge).save({mono:true,tileSize:240});
+  assert.deepEqual(await appearanceStorage(bridge).load(),{mono:true,tileSize:240});
+  for(const value of ['bad JSON','null','{"mono":"true","tileSize":999}']){
+    bridge.data.set('appearance',value);
+    assert.deepEqual(await appearanceStorage(bridge).load(),{mono:false,tileSize:160});
+  }
+  assert.deepEqual(await appearanceStorage({request:async()=>{throw Error('Denied');}}).load(),{mono:false,tileSize:160});
+});
+
+test('appearance writes stay ordered and recover after a failed save',async()=>{
+  const bridge=storage(),preferences=appearanceStorage(bridge);
+  bridge.fail('appearance');await assert.rejects(preferences.save({mono:true,tileSize:80}));
+  bridge.fail('');
+  await Promise.all([preferences.save({mono:true,tileSize:120}),preferences.save({mono:false,tileSize:200})]);
+  assert.deepEqual(await preferences.load(),{mono:false,tileSize:200});
 });

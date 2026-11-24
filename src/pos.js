@@ -21,7 +21,7 @@ export function createPos(host) {
   };
   const checkout = (id,terminalId) => {
     const row = db.get('checkouts',identifier(id));
-    if (!row || row.terminal_id !== terminalId) fail('Checkout is unavailable.');
+    if (!row || (terminalId && row.terminal_id !== terminalId)) fail('Checkout is unavailable.');
     return row;
   };
   const notify = t => {
@@ -33,9 +33,9 @@ export function createPos(host) {
     return {id:c.id,status:c.status,method:c.method,payment_hash:c.payment_hash,payment_request:c.payment_request,amount_sat:data.amount_sat,created_at:c.created_at,sale:data.sale,business:data.business,terminal_name:data.terminal_name,...onchainView(c,data)};
   };
   const summary = c => {
-    const {id,status,method,created_at,sale}=view(c);
-    const {currency,total_minor,tax_minor,tip_minor}=sale;
-    return {id,status,method,created_at,sale:{currency,total_minor,tax_minor,tip_minor}};
+    const {id,status,method,created_at,sale,amount_sat,terminal_name}=view(c);
+    const {currency,total_minor,tax_minor,tip_minor,exchange_rate}=sale;
+    return {id,status,method,created_at,amount_sat,terminal_name,sale:{currency,total_minor,tax_minor,tip_minor,exchange_rate}};
   };
   const settle = (c,sendShares=true) => {
     if (c.method==='onchain') {
@@ -102,21 +102,37 @@ export function createPos(host) {
     },
     saveTerminal(input) {
       const previous=input.id ? terminal(input.id) : null;
+      const append=input.append_products!==undefined;
+      if (append) {
+        if (!previous || !Array.isArray(input.append_products)) fail('Select a terminal and valid products to import.');
+        const saved=payload(previous);
+        input={...saved,products:[...saved.products,...input.append_products]};
+      }
       if (!previous && db.list('terminals',{},0,0).total >= 50) fail('Terminal limit reached.');
       const settings=normalizeTerminal(input,host.currencies(),host.wallets());
       if (settings.provider && !host.providers().includes(settings.provider)) fail('Fiat provider is unavailable.');
       const id=previous?.id || host.id('pos_');
-      const row={id,active:true,cashier_link:previous?.cashier_link || host.id('cash_'),display_link:previous?.display_link || host.id('display_'),last_created:previous?.last_created || 0,latest_checkout:previous?.latest_checkout || '',data_json:JSON.stringify(settings)};
+      const row={id,active:append ? previous.active : true,cashier_link:previous?.cashier_link || host.id('cash_'),display_link:previous?.display_link || host.id('display_'),last_created:previous?.last_created || 0,latest_checkout:previous?.latest_checkout || '',data_json:JSON.stringify(settings)};
       if (!previous) {
         save('links',{id:row.cashier_link,terminal_id:id,role:'cashier',revoked:false});
         save('links',{id:row.display_link,terminal_id:id,role:'display',revoked:false});
       }
       save('terminals',row); notify(row);
-      return {...settings,id,active:true,cashier_link:row.cashier_link,display_link:row.display_link};
+      return {...settings,id,active:row.active,cashier_link:row.cashier_link,display_link:row.display_link};
     },
     disableTerminal(input) {
       const t=terminal(input.id); t.active=false; save('terminals',t); notify(t);
       return {disabled:true};
+    },
+    deleteTerminal(input) {
+      const t=terminal(input.id);
+      // Disable first: interruption during revocation must leave every link closed.
+      t.active=false; save('terminals',t); notify(t);
+      for (const id of [t.cashier_link,t.display_link]) {
+        const link=db.get('links',id); if (link) save('links',{...link,revoked:true});
+      }
+      db.delete('terminals',t.id);
+      return {deleted:true};
     },
     rotateLinks(input) {
       const t=terminal(input.id);
@@ -205,15 +221,24 @@ export function createPos(host) {
       const {t}=access(input.link,true);
       return db.list('checkouts',{terminal_id:t.id},25,0).rows.map(summary);
     },
+    historyRate(input) {
+      access(input.link,true);
+      return currentRate(host,input.currency);
+    },
+    salesRate(input) {
+      return currentRate(host,input.currency);
+    },
     sales(input) {
-      const t=terminal(input.id);
+      const filters=input.id ? {terminal_id:terminal(input.id).id} : {};
       const offset=integer(Number(input.offset || 0),'page',0,1e7);
-      const page=db.list('checkouts',{terminal_id:t.id},50,offset);
+      const page=db.list('checkouts',filters,50,offset);
       return {total:page.total,rows:page.rows.map(c=>({...summary(c),payouts:JSON.parse(c.payouts_json)}))};
     },
+    saleReceipt(input) {
+      return view(checkout(input.checkoutId));
+    },
     reconcile(input) {
-      const t=terminal(input.id);
-      const c=checkout(input.checkout_id,t.id);
+      const c=checkout(input.checkout_id,input.id ? terminal(input.id).id : undefined);
       if (c.method!=='onchain' && c.payment_hash && c.status==='pending') host.refreshPayment(c.wallet,c.payment_hash);
       // Authenticated refresh must not bypass background-payment grants.
       // A paid event or cashier poll handles configured payouts under those grants.
@@ -241,4 +266,11 @@ export function createPos(host) {
 export function invoke(pos,method,json) {
   try { return JSON.stringify({ok:true,data:pos[method](object(JSON.parse(json)))}); }
   catch (error) { return JSON.stringify({ok:false,error:error instanceof InputError ? error.message : 'Request could not be completed. Please try again or contact the terminal owner.'}); }
+}
+
+function currentRate(host,currency) {
+  if (currency!=='sat' && !host.currencies().includes(currency)) fail('Unsupported currency.');
+  const rate=currency==='sat' ? 1 : host.rate(currency).rate;
+  if (!Number.isFinite(rate) || rate<=0) fail('Exchange rate is unavailable.');
+  return {rate};
 }
