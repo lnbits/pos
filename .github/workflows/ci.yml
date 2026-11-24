@@ -141,3 +141,115 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag --title "$RELEASE_TAG" --generate-notes \
             pos-*.zip SHA256SUMS
+
+  registry:
+    name: Open WASM registry PR
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.repository == 'lnbits/pos'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      REGISTRY_BRANCH: update-pos-${{ github.ref_name }}
+    steps:
+      - name: Check registry token
+        env:
+          EXT_GITHUB: ${{ secrets.EXT_GITHUB }}
+        run: |
+          if [ -z "$EXT_GITHUB" ]; then
+            echo '::error::EXT_GITHUB must allow branch pushes and pull requests in lnbits/lnbits-extensions-wasm.'
+            exit 1
+          fi
+
+      - name: Checkout WASM registry
+        uses: actions/checkout@v7
+        with:
+          repository: lnbits/lnbits-extensions-wasm
+          ref: main
+          token: ${{ secrets.EXT_GITHUB }}
+          fetch-depth: 0
+
+      - name: Download published release files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "pos-${RELEASE_TAG#v}.zip" \
+            --pattern SHA256SUMS \
+            --dir "$RUNNER_TEMP/pos-published-release"
+
+      - name: Prepare registry branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin "$REGISTRY_BRANCH" > /dev/null; then
+            git fetch origin "$REGISTRY_BRANCH"
+            git checkout -b "$REGISTRY_BRANCH" FETCH_HEAD
+            git merge --no-edit origin/main
+          else
+            git checkout -b "$REGISTRY_BRANCH"
+          fi
+
+      - name: Validate published ZIP and update registry entry
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          from pathlib import Path
+          from zipfile import ZipFile
+
+          import update_version
+
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
+              raise ValueError('Expected a stable vX.Y.Z release tag')
+          version = tag[1:]
+          release_dir = Path(os.environ['RUNNER_TEMP']) / 'pos-published-release'
+          archive = release_dir / f'pos-{version}.zip'
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          checksums = (release_dir / 'SHA256SUMS').read_text().splitlines()
+          if checksums != [f'{digest}  {archive.name}']:
+              raise ValueError('Published ZIP does not match SHA256SUMS')
+          with ZipFile(archive) as package:
+              root, config_name = update_version.validate_wasm_archive_layout(package)
+              config = json.loads(package.read(config_name))
+              update_version.validate_wasm_config('pos', tag, version, package, root, config)
+
+          manifest = json.loads(Path('extensions.json').read_text())
+          for entry in manifest.get('extensions', []):
+              if entry['id'] == 'pos' and tuple(map(int, entry['version'].split('.'))) > tuple(map(int, version.split('.'))):
+                  raise ValueError('Registry already contains a newer PoS release')
+          # PoS uses /pos/static/... for its tile; the registry needs a repo path.
+          if config.get('tile', '').startswith('/pos/'):
+              config['tile'] = config['tile'][len('/pos/'):]
+          repo = 'https://github.com/lnbits/pos'
+          update_version.update_manifest(
+              'pos', tag, version, repo,
+              f'{repo}/releases/download/{tag}/{archive.name}', digest, config,
+          )
+          PY
+
+      - name: Open or reuse registry PR
+        env:
+          GH_TOKEN: ${{ secrets.EXT_GITHUB }}
+        run: |
+          git add extensions.json
+          if ! git diff --cached --quiet; then
+            git commit -m "[UPDATE] pos to $RELEASE_TAG"
+            git push origin "$REGISTRY_BRANCH"
+          fi
+          if git diff --quiet origin/main HEAD -- extensions.json; then
+            echo 'Registry already contains this release.'
+            exit 0
+          fi
+          existing=$(gh pr list --repo lnbits/lnbits-extensions-wasm \
+            --head "$REGISTRY_BRANCH" --state open --json number --jq 'length')
+          if [ "$existing" = '0' ]; then
+            gh pr create --repo lnbits/lnbits-extensions-wasm \
+              --title "[UPDATE] pos to $RELEASE_TAG" \
+              --body "Automated PoS registry update using the verified runtime ZIP and SHA-256 checksum published at https://github.com/lnbits/pos/releases/tag/$RELEASE_TAG." \
+              --head "$REGISTRY_BRANCH" --base main
+          fi
